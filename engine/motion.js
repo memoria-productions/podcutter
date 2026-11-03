@@ -33,7 +33,10 @@
   var B = 16, HB = B >> 1;           // block size full / half res
   var R_HALF = 4;                    // coarse search radius (= ±8 px at full res)
   var MARGIN = 2 * R_HALF + 2;
-  var CACHE_VERSION = 6;
+  var CACHE_VERSION = 8;
+  // Slow drift: frames 1/6 s apart can't see a creep under ~1.3 %/s (it rounds to zero), so frames a second
+  // apart are compared too and the drift spread back per second (down to ~0.2 %/s).
+  var LAG = FPS;
   // Small colour thumbnails (1 per second) for "who's in the shot" on operated cameras.
   var TW = 32, TH = 18, TSIZE = TW * TH * 3;
 
@@ -278,7 +281,7 @@
       "-f", "rawvideo", "pipe:1"];
     return new Promise(function (resolve, reject) {
       var p = cp.spawn(opts.ffmpegPath || "ffmpeg", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-      var frameSize = W * H * 3, pending = Buffer.alloc(0), idx = 0, prev = null, prevHalf = null, err = "";
+      var frameSize = W * H * 3, pending = Buffer.alloc(0), idx = 0, prev = null, prevHalf = null, err = "", hist = new Array(LAG);
       p.stdout.on("data", function (chunk) {
         pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
         while (pending.length >= frameSize) {
@@ -288,6 +291,17 @@
           var cur = toGray(rgb);
           var curHalf = downsample(cur);
           if (prev && idx - 1 < total) out[idx - 1] = frameMotion(prev, cur, prevHalf, curHalf);
+          // The second-apart reading belongs to the middle of its window. It only counts where the short readings in
+          // the window saw no move (zero at both ends, never two in a row: a creep can tick over a pixel now and
+          // then), so a real move's own readings never spill half a second either side of it.
+          var old = hist[idx % LAG], mid = idx - 1 - (LAG >> 1);
+          var quiet = !!old && idx - 1 < total && out[idx - LAG] === 0 && out[idx - 1] === 0;
+          for (var q = idx - LAG + 1; quiet && q < idx; q++) quiet = out[q] === 0 || out[q - 1] === 0;
+          if (quiet && mid >= 0 && out[mid] === 0) {
+            var slow = frameMotion(old.g, cur, old.h, curHalf);
+            if (isFinite(slow) && slow < 100) out[mid] = slow / LAG;
+          }
+          hist[idx % LAG] = { g: cur, h: curHalf };
           prev = cur; prevHalf = curHalf; idx++;
           if (opts.onProgress && idx % 60 === 0) opts.onProgress(Math.min(1, idx / total));
         }

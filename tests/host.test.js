@@ -348,3 +348,37 @@ test("host sets the sequence In point at the welcome", () => {
   assert.equal(inSec, 12.5);
   assert.equal(r.inSec, 12.5);
 });
+
+test("restoring a multicam joins PodCutter's through-edits back into one clip, keeping content cuts", () => {
+  const fake = fakePremiere(60, 1);
+  const tick = (s) => ({ ticks: String(Math.round(s * TPS)) });
+  const mcItem = { nodeId: "mc", isSequence: () => true, isMulticamClip: () => true, getMediaPath: () => "" };
+  // Built 0-40 s: Cut to Camera left edit points at 10, 20 and 30 s; at 30 s there's also a content cut (the
+  // source jumps from 30 to 40 s), and a title sits after 40 s. The multicam's sound on A1 was cut the same way.
+  const pieces = (track) => [[0, 10, 4], [10, 20, 14], [20, 30, 24], [30, 40, 44], [40, 50, null]].map(([a, b, i]) => {
+    const c = { name: i === null ? "Title" : "245_mc", start: tick(a), end: tick(b), inPoint: tick(i || 0),
+      projectItem: i === null ? { nodeId: "title", getMediaPath: () => "" } : mcItem };
+    c.remove = () => track._clips.splice(track._clips.indexOf(c), 1);
+    return c;
+  });
+  const v1 = fake.video[0], a1 = fake.seq.audioTracks[0];
+  v1._clips = pieces(v1); a1._clips = pieces(a1);
+  vm.createContext(fake.ctx);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "host", "host.jsx"), "utf8").replace("#target premierepro", ""), fake.ctx);
+  const call = (expr) => JSON.parse(vm.runInContext(expr, fake.ctx));
+  const q = (o) => JSON.stringify(JSON.stringify(o));
+  const span = (tr) => tr._clips.map((c) => [+c.start.ticks / TPS, +c.end.ticks / TPS, +c.inPoint.ticks / TPS]);
+
+  const r = call("PD.restoreMulticam(" + q({ sequenceID: "seq-1", track: 0, startSec: 0, endSec: 40 }) + ")");
+  assert.ok(r.ok, r.error);
+  assert.deepEqual([r.joined, r.audioJoined, r.pieces, r.starts], [2, 2, 2, [0, 30]]);
+  assert.deepEqual(span(v1), [[0, 30, 4], [30, 40, 44], [40, 50, 0]], "through-edits joined; the content cut and the title stay");
+  assert.deepEqual(span(a1), [[0, 30, 4], [30, 40, 44], [40, 50, 0]], "the sound under it too");
+  // Nothing left to join the second time.
+  assert.equal(call("PD.restoreMulticam(" + q({ sequenceID: "seq-1", track: 0, startSec: 0, endSec: 40 }) + ")").joined, 0);
+  // Removing the picture can take its linked sound with it: the sound is still put back under the clip.
+  v1._clips = pieces(v1); a1._clips = pieces(a1).filter((c, i) => i === 0 || i > 2);
+  assert.ok(call("PD.restoreMulticam(" + q({ track: 0, startSec: 0, endSec: 40 }) + ")").ok);
+  assert.deepEqual(span(a1), [[0, 30, 4], [30, 40, 44], [40, 50, 0]]);
+  assert.match(call("PD.restoreMulticam(" + q({ sequenceID: "other", track: 0, startSec: 0, endSec: 40 }) + ")").error, /Open the multicam sequence/);
+});

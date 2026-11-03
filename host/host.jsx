@@ -550,6 +550,78 @@ var PD = (function () {
     return ok({ shown: shown });
   }
 
+  /**
+   * json: { sequenceID, track, startSec, endSec } — put a multicam clip back the way it was before Cut to Camera:
+   * runs of through-edits in the range (pieces that touch, share the multicam source and carry on in it without a
+   * jump) become one clip again: the later pieces are removed and the first is lengthened over them. Real cuts
+   * (content removed, a gap, another clip) stay. Audio tracks carrying the same multicam get the same.
+   * -> { joined: pieces removed, pieces: what's left in the range on the video track, starts: [sec] of those }
+   */
+  function restoreMulticam(json) {
+    var seq = seqOrFail();
+    if (!seq) return fail("No active sequence.");
+    var p = JSON.parse(json);
+    if (p.sequenceID && seq.sequenceID !== p.sequenceID) return fail("Open the multicam sequence that was built first.");
+    var vt = seq.videoTracks[p.track];
+    if (!vt) return fail("Video track V" + (p.track + 1) + " not found.");
+    var tol = parseFloat(seq.timebase) / TPS / 2;
+    function idOf(it) { try { return it.projectItem ? it.projectItem.nodeId : null; } catch (e) { return null; } }
+    function piecesOf(tr, id) {
+      var out = [];
+      for (var c = 0; c < tr.clips.numItems; c++) {
+        var it = tr.clips[c], a = sec(it.start), b = sec(it.end);
+        if (a < p.startSec - tol || b > p.endSec + tol) continue;
+        if (id !== undefined && idOf(it) !== id) continue;
+        out.push({ item: it, a: a, b: b, inS: sec(it.inPoint), id: idOf(it) });
+      }
+      out.sort(function (x, y) { return x.a - y.a; });
+      return out;
+    }
+    function join(tr, id) {
+      var ps = piecesOf(tr, id), removed = 0;
+      var groups = [], g = null;
+      for (var i = 0; i < ps.length; i++) {
+        var pr = g ? g[g.length - 1] : null, cur = ps[i];
+        var through = pr && cur.id !== null && cur.id === pr.id && Math.abs(cur.a - pr.b) < tol &&
+          Math.abs((cur.inS - pr.inS) - (pr.b - pr.a)) < tol;
+        if (through) g.push(cur); else { g = [cur]; groups.push(g); }
+      }
+      // Last run first, and within a run last piece first, so nothing shifts under the pieces still to do.
+      for (var k = groups.length - 1; k >= 0; k--) {
+        var run = groups[k];
+        if (run.length < 2) continue;
+        var endT = new Time(); endT.ticks = run[run.length - 1].item.end.ticks;
+        for (var j = run.length - 1; j >= 1; j--) { run[j].item.remove(false, false); removed++; }
+        run[0].item.end = endT;
+        if (Math.abs(sec(run[0].item.end) - sec(endT)) > tol) {
+          return { error: "Premiere wouldn't lengthen the clip at " + run[0].a.toFixed(2) + " s back over the pieces removed after it: check the timeline there (Edit > Undo may put them back)." };
+        }
+      }
+      return { removed: removed };
+    }
+    var v = join(vt);
+    if (v.error) return fail(v.error);
+    // The same multicam on audio tracks (its sound, cut along with the picture): under each joined clip, the
+    // pieces of the same source at the same offset become one again, whether removing the picture took its
+    // linked sound with it or not.
+    var vp = piecesOf(vt), audioJoined = 0;
+    for (var i = 0; i < vp.length; i++) {
+      if (vp[i].id === null) continue;
+      for (var t = 0; t < seq.audioTracks.numTracks; t++) {
+        var ap = piecesOf(seq.audioTracks[t], vp[i].id), mine = [];
+        for (var k2 = 0; k2 < ap.length; k2++) {
+          if (ap[k2].a >= vp[i].a - tol && ap[k2].b <= vp[i].b + tol && Math.abs((ap[k2].inS - ap[k2].a) - (vp[i].inS - vp[i].a)) < tol) mine.push(ap[k2]);
+        }
+        if (!mine.length || Math.abs(mine[0].a - vp[i].a) > tol) continue;
+        for (var r = mine.length - 1; r >= 1; r--) { mine[r].item.remove(false, false); audioJoined++; }
+        if (Math.abs(mine[0].b - vp[i].b) > tol) { var ae = new Time(); ae.ticks = vp[i].item.end.ticks; mine[0].item.end = ae; }
+      }
+    }
+    var left = piecesOf(vt), starts = [];
+    for (var s = 0; s < left.length; s++) starts.push(left[s].a);
+    return ok({ joined: v.removed, audioJoined: audioJoined, pieces: left.length, starts: starts });
+  }
+
   /** Open a sequence by ID (used to recut an earlier PodCutter copy). */
   function openSequenceById(id) {
     for (var i = 0; i < app.project.sequences.numSequences; i++) {
@@ -571,5 +643,5 @@ var PD = (function () {
   return { ping: ping, getSequenceInfo: getSequenceInfo, getPlayhead: getPlayhead, setPlayhead: setPlayhead,
            addMarkers: addMarkers, clearMarkers: clearMarkers, duplicateActive: duplicateActive,
            razorTrack: razorTrack, applyEnables: applyEnables, showTracks: showTracks, multicamAtPlayhead: multicamAtPlayhead,
-           multicamCovering: multicamCovering, countClips: countClips, colorClips: colorClips, selectClips: selectClips, openSequenceById: openSequenceById, sequenceExists: sequenceExists, setInOut: setInOut };
+           multicamCovering: multicamCovering, countClips: countClips, colorClips: colorClips, selectClips: selectClips, openSequenceById: openSequenceById, sequenceExists: sequenceExists, restoreMulticam: restoreMulticam, setInOut: setInOut };
 })();

@@ -100,6 +100,11 @@
 - **Dolly stays on the last person until it moves** (when there is no Who's in the shot reading), and a follow-cam shot that runs across a change of speaker is checked against whoever has the floor at each moment.
 - **Picture names checked by voice:** a long steady dolly stretch named after someone silent while another person talks is treated as on the talker. A follow-cam shot spanning several speakers is split per speaker, so monologue cutaways measure one person's turn. A brief aside over someone who carries on isn't crosstalk.
 
+## v0.20 (added)
+
+- **Slow creep counts as movement:** the motion analyzer also compares frames a second apart wherever neighbouring frames show nothing, so a dolly creeping at 0.2-1.3 %/s (which used to read as steady) is seen; Steady below now defaults to 0.3 %/s (was 1.2) and goes down to 0.1. Camera movement is analyzed again once (cache version 8), about 15% slower.
+- **Restore multicam** replaces Undo multicam cut: the edit points PodCutter's builds left are joined back into whole clips (picture and the multicam's sound), keeping real cuts, and the wide is put on. Undo used to retype angles, leaving every edit point behind.
+
 ## v0.19.1 (added)
 
 - **Build as multicam is the build for multicam angles:** with cameras on a multicam's angles it's the blue button, and Build cut on a copy and Recut (stacked tracks only) are hidden.

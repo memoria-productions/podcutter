@@ -60,8 +60,8 @@ window.PD_UI = {
         help: "No reaction or cutaway this close before someone else takes over (a question running into its answer): stay on the person talking, that cut is coming." }
     ]},
     { title: "Moving cameras", open: false, onlyIfMoving: true, controls: [
-      { key: "steadyMaxPct", label: "Steady below", min: 0.3, max: 4, step: 0.1, unit: "%/s",
-        help: "Camera motion under this (percent of frame width per second) counts as steady. Raise it if a slightly floaty dolly never counts as steady." },
+      { key: "steadyMaxPct", label: "Steady below", min: 0.1, max: 4, step: 0.05, unit: "%/s",
+        help: "Camera motion under this (percent of frame width per second) counts as steady. Lower it to catch slower creeps; raise it if a slightly floaty dolly never counts as steady." },
       { key: "fastMinPct", label: "Big move above", min: 2, max: 30, step: 0.5, unit: "%/s",
         help: "Motion over this is a reposition or whip: always cut away from it." },
       { key: "settleSec", label: "Settle time", min: 0, max: 3, step: 0.1, unit: "s",

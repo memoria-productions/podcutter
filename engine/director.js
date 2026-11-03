@@ -71,7 +71,7 @@
     angleVariety: "rotate",    // "first" | "rotate" | "random"  (speakers with several close-ups)
     wideBias: 0,               // -1..1: negative keeps to close-ups, positive favours the wide (some turns play on it)
     // Moving cameras (dolly, slider, handheld, operated cams) — needs camera motion analysis
-    steadyMaxPct: 1.2,         // below this much camera motion (% of frame width per second) = steady
+    steadyMaxPct: 0.3,         // below this much camera motion (% of frame width per second) = steady (slow creep reads from ~0.2)
     fastMinPct: 6,             // above this = a real move/reposition; never on air
     settleSec: 0.6,            // camera must have been steady this long before we cut to it
     maxWaitSec: 1.5,           // hold the previous shot up to this long waiting for the camera to settle
@@ -1756,7 +1756,7 @@
   }
 
   return {
-    VERSION: "0.19.1",
+    VERSION: "0.20.0",
     DEFAULT_STYLE: DEFAULT_STYLE,
     DEFAULT_SPEAKER: DEFAULT_SPEAKER,
     PRESETS: PRESETS,

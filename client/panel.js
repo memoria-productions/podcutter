@@ -2282,16 +2282,15 @@
     resume.classList.toggle("hidden", !left);
     resume.textContent = left ? "Resume (" + left + " left)" : "Resume";
     btn.textContent = rec && rec.history.length ? "Recut multicam" : "Build as multicam (experimental)";
-    undo.classList.toggle("hidden", !(rec && rec.history.length));
-    undo.textContent = rec && rec.history.length > 1 ? "Undo multicam cut" : "Undo multicam cut (back to the wide)";
+    if (!restoreArmed) undo.textContent = "Restore multicam";
+    undo.classList.toggle("hidden", !(rec && (rec.history.length || (run && run.done > 0))));
   }
 
   /**
    * Apply angles to a multicam (or Multi-Camera enabled nested) clip in the active sequence by pressing Cut to
-   * Camera. Every existing piece in the range is retyped too, so it works for a first build, a recut after
-   * settings changed, and an undo alike (earlier edit points just become through-edits on the same angle).
-   * mode: "build" (the current plan), "resume" (the run that stopped), "undo" (the build before the last one,
-   * or the wide everywhere after a first build).
+   * Camera. Every existing piece in the range is retyped too, so it works for a first build and a recut after
+   * settings changed alike (earlier edit points just become through-edits on the same angle).
+   * mode: "build" (the current plan) or "resume" (the run that stopped).
    */
   var buildMulticam = guard(function (mode) {
     if (!inPremiere || !hasNode || !K) throw new Error("Build as multicam needs the panel running inside Premiere on Windows.");
@@ -2300,7 +2299,7 @@
       if (blindCameras().length) throw new Error(blindMessage(blindCameras()));
     }
     var cams = state.config.cameras.filter(function (c) { return c.enabled !== false; });
-    var verb = mode === "undo" ? "Undoing" : "Building multicam";
+    var verb = "Building multicam";
     function say(t) { $("mcNote").textContent = t; status(t, ""); }
     function step(t) { log("Build as multicam: " + t); }
     var seqId = null, rec = null, info = null, keys = null, desired = null, startSec = 0, endSec = 0, partial = false, typed = null, from = 0;
@@ -2310,15 +2309,8 @@
       if (mode === "resume") {
         var run = rec.run;
         if (!run || run.done >= run.typed.length) throw new Error("Nothing to resume on this sequence.");
+        if (run.mode === "undo") throw new Error("That stopped run was an old-style undo: use Restore multicam instead.");
         typed = run.typed; from = run.done; desired = run.desired; startSec = run.startSec; endSec = run.endSec; partial = run.partial; mode = run.mode;
-      } else if (mode === "undo") {
-        if (!rec.history.length) throw new Error("No multicam build of this sequence to undo.");
-        var last = rec.history[rec.history.length - 1], prev = rec.history[rec.history.length - 2];
-        startSec = last.startSec; endSec = last.endSec; partial = last.partial;
-        var wc = wideCam();
-        desired = prev ? prev.desired : [{ sec: startSec, camera: wc ? angleOfCam(wc) : 1 }];
-        step("undo on “" + seqId + "”: " + rec.history.length + " build(s) kept; restoring " +
-          (prev ? "the build from " + (prev.at || "earlier") : "the wide everywhere") + " between " + fmt(startSec) + " and " + fmt(endSec));
       } else {
         desired = D.toMulticamCuts(state.result, cams);
         if (!desired.length) throw new Error("The planned cut is empty.");
@@ -2376,7 +2368,7 @@
       }).then(function (c) {
         if (rec.baseLabel === undefined || rec.baseLabel === null) rec.baseLabel = c.firstLabel; // before anything was labelled Rose
         typed = D.multicamRetype(desired, c.starts, startSec, endSec);
-        step((mode === "undo" ? "undo" : rec.history.length ? "recut" : "build") + ": " + typed.length + " points to type (" +
+        step((rec.history.length ? "recut" : "build") + ": " + typed.length + " points to type (" +
           c.starts.length + " existing pieces) between " + fmt(startSec) + " and " + fmt(endSec));
       });
     }).then(function () {
@@ -2394,10 +2386,10 @@
           return labelCamera2(info.sequenceID, info.track, ranges, { within: [startSec, endSec], color: rec.baseLabel }, sender, step);
         } });
     }).then(function (res) {
-      // Done: record it (a build joins the history; an undo removes the build it undid).
+      // Done: record it (Recut and Restore use the history).
       rec = mcRecord(seqId); rec.run = null;
-      if (mode === "undo") rec.history.pop();
-      else { rec.history.push({ desired: desired, startSec: startSec, endSec: endSec, partial: partial, at: new Date().toISOString() }); if (rec.history.length > 5) rec.history.shift(); }
+      rec.history.push({ desired: desired, startSec: startSec, endSec: endSec, partial: partial, at: new Date().toISOString() });
+      if (rec.history.length > 5) rec.history.shift();
       saveRecord(seqId, rec);
       renderMcRow();
       return callHostWithin(10000, "countClips", [JSON.stringify({ track: info.track, startSec: startSec, endSec: endSec })]).then(function (c) {
@@ -2405,11 +2397,10 @@
         return Promise.resolve(res.after)
           .then(function (rose) { return mode === "build" ? markWelcome().then(function () { return rose; }) : rose; })
           .then(function (rose) {
-            say((mode === "undo" ? "Undid the last multicam cut on “" + info.name + "”" + (rec.history.length ? " (back to the build before it)" : " (back to the wide)")
-              : "Built “" + info.name + "” as multicam") + ": " + res.done + " points in " + Math.round(res.ms / 1000) + " s" + roseNote(rose) + ". " +
+            say("Built “" + info.name + "” as multicam: " + res.done + " points in " + Math.round(res.ms / 1000) + " s" + roseNote(rose) + ". " +
               (okAll ? "The multicam track has " + c.clips + " pieces in the range, as expected."
                 : "Only " + c.clips + " of " + want + " show on the track: raise Pause (Settings) and run it again."));
-            status(okAll ? (mode === "undo" ? "Undo finished." : "Multicam build finished.") : "Finished, but some cuts didn't land.", okAll ? "ok" : "err", 1);
+            status(okAll ? "Multicam build finished." : "Finished, but some cuts didn't land.", okAll ? "ok" : "err", 1);
           });
       });
     }, function (e) {
@@ -2417,6 +2408,48 @@
       if (e.done !== undefined && typed) $("mcNote").textContent = e.message + (e.done < typed.length ? " Click Resume to carry on from there." : "");
       throw e;
     });
+  });
+
+  /**
+   * Restore multicam: the edit points PodCutter's builds left in the built range are joined back into whole clips
+   * (real cuts, like removed content, stay), the wide is put on and the clips get their original label colour.
+   * Unlike retyping angles, nothing of the builds is left behind; the build history is cleared.
+   */
+  var restoreArmed = null;
+  var restoreMulticam = guard(function () {
+    if (!inPremiere || !hasNode || !K) throw new Error("Restore multicam needs the panel running inside Premiere on Windows.");
+    function say(t) { $("mcNote").textContent = t; status(t, ""); }
+    function step(t) { log("Restore multicam: " + t); }
+    var seqId = null, rec = null, info = null, res = null, startSec = 0, endSec = 0, wide = 1;
+    return callHostWithin(10000, "getPlayhead").then(function (p) {
+      seqId = p.sequenceID; rec = mcRecord(seqId);
+      var spans = rec.history.map(function (h) { return [h.startSec, h.endSec]; });
+      if (rec.run && rec.run.done > 0) spans.push([rec.run.startSec, rec.run.endSec]);
+      if (!spans.length) throw new Error("PodCutter hasn't built a multicam on this sequence, so there's nothing of its to take out.");
+      startSec = Math.min.apply(null, spans.map(function (s) { return s[0]; }));
+      endSec = Math.max.apply(null, spans.map(function (s) { return s[1]; }));
+      return callHostWithin(10000, "multicamCovering", [JSON.stringify({ startSec: startSec, endSec: endSec })]);
+    }).then(function (r) {
+      info = r;
+      if (r.track === undefined) throw new Error("“" + r.name + "” has no multicam clip between " + fmt(startSec) + " and " + fmt(endSec) + ".");
+      say("Joining the edit points on V" + (r.track + 1) + " between " + fmt(startSec) + " and " + fmt(endSec) + "\u2026");
+      return callHostWithin(120000, "restoreMulticam", [JSON.stringify({ sequenceID: r.sequenceID, track: r.track, startSec: startSec, endSec: endSec })]);
+    }).then(function (x) {
+      res = x;
+      step(x.joined + " edit points joined on the picture, " + x.audioJoined + " on the sound; " + x.pieces + " clip" + (x.pieces === 1 ? "" : "s") +
+        " left between " + fmt(startSec) + " and " + fmt(endSec) + (x.pieces > 1 ? " (real cuts, kept)" : ""));
+      // The builds are gone from the timeline now, whatever happens with the angle and labels.
+      rec.history = []; rec.run = null; saveRecord(seqId, rec); renderMcRow();
+      var wc = wideCam(); wide = wc ? angleOfCam(wc) : 1;
+      var cuts = x.starts.filter(function (s) { return s >= startSec - 0.02 && s < endSec - 0.02; }).map(function (s) { return { sec: s, camera: wide }; });
+      if (!cuts.length) return null;
+      return typeCuts({ cuts: cuts, keys: keysFor([wide]), from: 0, label: "Restoring", say: say, step: step, onCut: function () {},
+        after: function (sender) { return labelCamera2(info.sequenceID, info.track, [], { within: [startSec, endSec], color: rec.baseLabel }, sender, step); } });
+    }).then(function () {
+      say("Restored “" + info.name + "”: " + res.joined + " PodCutter edit point" + (res.joined === 1 ? "" : "s") + " removed, on the wide (camera " + wide + ")" +
+        (res.pieces > 1 ? "; " + (res.pieces - 1) + " real cut" + (res.pieces > 2 ? "s" : "") + " kept" : "") + ".");
+      status("Multicam restored.", "ok", 1);
+    }, function (e) { renderMcRow(); throw e; });
   });
 
   /**
@@ -2575,7 +2608,18 @@
   $("btnKbdBannerStop").onclick = function () { kbdStop = true; $("kbdBannerSmall").textContent = "Stopping after this cut…"; };
   $("btnBuildMc").onclick = function () { buildMulticam("build"); };
   $("btnResumeMc").onclick = function () { buildMulticam("resume"); };
-  $("btnUndoMc").onclick = function () { buildMulticam("undo"); };
+  // Two-step confirm, like Build cut on a copy.
+  $("btnUndoMc").onclick = function () {
+    var b = $("btnUndoMc");
+    if (!restoreArmed) {
+      b.textContent = "Click again to restore the multicam";
+      status("This joins every edit point PodCutter's builds left on the multicam back into whole clips and puts the wide on. Real cuts stay.", "");
+      restoreArmed = setTimeout(function () { restoreArmed = null; b.textContent = "Restore multicam"; }, 4000);
+      return;
+    }
+    clearTimeout(restoreArmed); restoreArmed = null; b.textContent = "Restore multicam";
+    restoreMulticam();
+  };
   $("mcInOut").checked = !!load("mcInOut", false);
   $("mcInOut").onchange = function () { store("mcInOut", this.checked); };
   $("rose2").checked = load("rose2", true) !== false;
