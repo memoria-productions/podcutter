@@ -3,7 +3,7 @@
  *
  * Measures how much the *camera* moves (pan, tilt, dolly/push, zoom, shake),
  * not how much the people in frame move. Video is decoded by ffmpeg to tiny
- * grayscale frames (160x90 at 6 fps); each frame pair is block-matched
+ * grayscale frames (160x90 at 6 fps, from 320x180); each frame pair is block-matched
  * (coarse-to-fine), and a robust similarity model (translation + scale +
  * rotation) is fitted to the block vectors. Blocks that disagree with the
  * dominant motion — a gesturing guest, a nodding head — are rejected as
@@ -12,6 +12,10 @@
  * Output: a curve of camera motion in "% of frame width per second" (the
  * fastest-moving frame corner), one value per 1/6 s, in sequence time.
  * Unknown frames (black, featureless) are NaN. Results are cached on disk.
+ *
+ * Two finer readings fill in where neighbouring frames show nothing: frames a
+ * second apart (a slow creep), and the whole picture's shift at 320x180 to a
+ * few hundredths of a pixel (a knock on the dolly rail, 2-3 px at full size).
  */
 (function (root, factory) {
   var api = factory();
@@ -33,10 +37,15 @@
   var B = 16, HB = B >> 1;           // block size full / half res
   var R_HALF = 4;                    // coarse search radius (= ±8 px at full res)
   var MARGIN = 2 * R_HALF + 2;
-  var CACHE_VERSION = 8;
+  var CACHE_VERSION = 9;
   // Slow drift: frames 1/6 s apart can't see a creep under ~1.3 %/s (it rounds to zero), so frames a second
   // apart are compared too and the drift spread back per second (down to ~0.2 %/s).
   var LAG = FPS;
+  // Jolts: a knock on the dolly rail shifts the picture 2-3 px at full size in one step, about 0.2 px here,
+  // under the noise floor of the block matching above. Frames are decoded at twice the size and the whole
+  // picture's shift is measured there too (consensus of many blocks: noise ~0.01-0.04 px, a jolt 0.15+).
+  var FW = W * 2, FH = H * 2, JOLT_PX = 0.09, JOLT_PCT = 1.3; // a jolt reads as a slow move, at least
+  // Ep 245 (dolly, 5 min): 3 jolts the coarse reading missed, no false ones; a static wide reads 0.01 px at most.
   // Small colour thumbnails (1 per second) for "who's in the shot" on operated cameras.
   var TW = 32, TH = 18, TSIZE = TW * TH * 3;
 
@@ -244,10 +253,68 @@
    * opts: { ffmpegPath, onProgress(fraction) }
    */
   /** RGB frame -> luma (for motion) and, once a second, a 32x18 colour thumbnail. */
-  function toGray(rgb) {
-    var g = new Uint8Array(W * H);
-    for (var i = 0, j = 0; i < g.length; i++, j += 3) g[i] = (rgb[j] * 77 + rgb[j + 1] * 150 + rgb[j + 2] * 29) >> 8;
+  function toGray(rgb) { return grayOf(rgb, W * H); }
+  function grayOf(rgb, n) {
+    var g = new Uint8Array(n);
+    for (var i = 0, j = 0; i < n; i++, j += 3) g[i] = (rgb[j] * 77 + rgb[j + 1] * 150 + rgb[j + 2] * 29) >> 8;
     return g;
+  }
+  /** FWxFH RGB -> WxH RGB (2x2 average, as ffmpeg's area scaling would give). */
+  function halveRgb(big) {
+    var out = new Uint8Array(W * H * 3);
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) for (var c = 0; c < 3; c++) {
+      var a = ((2 * y) * FW + 2 * x) * 3 + c, b = a + FW * 3;
+      out[(y * W + x) * 3 + c] = (big[a] + big[a + 3] + big[b] + big[b + 3] + 2) >> 2;
+    }
+    return out;
+  }
+
+  /**
+   * Shift of the whole picture between two FWxFH gray frames, to a few hundredths of a pixel: block matching
+   * (±2 px, sub-pixel by parabola) on a grid of textured blocks, then the largest group of blocks agreeing
+   * within 0.12 px (the background; people moving disagree). -> { d, dx, dy, support } or null.
+   */
+  var FB = 16, FR = 2, FSTEP = 16;
+  function fineShift(a, b) {
+    var vs = [];
+    for (var by = FR + 2; by + FB + FR + 2 < FH; by += FSTEP) for (var bx = FR + 2; bx + FB + FR + 2 < FW; bx += FSTEP) {
+      var v = fineBlock(a, b, bx, by);
+      if (v) vs.push(v);
+    }
+    if (vs.length < 20) return null;
+    var best = null;
+    for (var i = 0; i < vs.length; i++) {
+      var near = [];
+      for (var k = 0; k < vs.length; k++) if (Math.abs(vs[k][0] - vs[i][0]) < 0.12 && Math.abs(vs[k][1] - vs[i][1]) < 0.12) near.push(vs[k]);
+      if (!best || near.length > best.length) best = near;
+    }
+    if (best.length < vs.length * 0.3) return null; // no clear background
+    var mx = 0, my = 0;
+    best.forEach(function (u) { mx += u[0]; my += u[1]; });
+    mx /= best.length; my /= best.length;
+    return { d: Math.sqrt(mx * mx + my * my), dx: mx, dy: my, support: best.length / vs.length };
+  }
+  function fineBlock(a, b, bx, by) {
+    var mean = 0, x, y;
+    for (y = 0; y < FB; y++) for (x = 0; x < FB; x++) mean += a[(by + y) * FW + bx + x];
+    mean /= FB * FB;
+    var v = 0;
+    for (y = 0; y < FB; y++) for (x = 0; x < FB; x++) { var d = a[(by + y) * FW + bx + x] - mean; v += d * d; }
+    if (v / (FB * FB) < 60) return null; // flat: nothing to match
+    var n = 2 * FR + 1, cost = new Float64Array(n * n), bdx = 0, bdy = 0, be = Infinity;
+    for (var dy = -FR; dy <= FR; dy++) for (var dx = -FR; dx <= FR; dx++) {
+      var e = 0;
+      for (y = 0; y < FB; y++) {
+        var ra = (by + y) * FW + bx, rb = (by + y + dy) * FW + bx + dx;
+        for (x = 0; x < FB; x++) e += Math.abs(a[ra + x] - b[rb + x]);
+      }
+      cost[(dy + FR) * n + dx + FR] = e;
+      if (e < be) { be = e; bdx = dx; bdy = dy; }
+    }
+    if (Math.abs(bdx) === FR || Math.abs(bdy) === FR) return null; // moved further than a jolt
+    function c(dx, dy) { return cost[(dy + FR) * n + dx + FR]; }
+    function para(m, z, p) { var den = m - 2 * z + p; return den > 0 ? 0.5 * (m - p) / den : 0; }
+    return [bdx + para(c(bdx - 1, bdy), be, c(bdx + 1, bdy)), bdy + para(c(bdx, bdy - 1), be, c(bdx, bdy + 1))];
   }
   function thumbnail(rgb, out, offset) {
     var bx = W / TW, by = H / TH; // 5 x 5 source pixels per thumbnail pixel
@@ -277,20 +344,28 @@
     var thumbs = new Uint8Array(seconds * TSIZE);
     var args = ["-hide_banner", "-nostats", "-loglevel", "error", "-hwaccel", "auto",
       "-ss", String(Math.max(0, inSec)), "-t", String(durSec), "-i", mediaPath,
-      "-an", "-sn", "-dn", "-vf", "fps=" + FPS + ",scale=" + W + ":" + H + ":flags=area,format=rgb24",
+      "-an", "-sn", "-dn", "-vf", "fps=" + FPS + ",scale=" + FW + ":" + FH + ":flags=area,format=rgb24",
       "-f", "rawvideo", "pipe:1"];
     return new Promise(function (resolve, reject) {
       var p = cp.spawn(opts.ffmpegPath || "ffmpeg", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-      var frameSize = W * H * 3, pending = Buffer.alloc(0), idx = 0, prev = null, prevHalf = null, err = "", hist = new Array(LAG);
+      var frameSize = FW * FH * 3, pending = Buffer.alloc(0), idx = 0, prev = null, prevHalf = null, prevFine = null, err = "", hist = new Array(LAG);
+      var jolts = [];
       p.stdout.on("data", function (chunk) {
         pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
         while (pending.length >= frameSize) {
-          var rgb = new Uint8Array(pending.buffer.slice(pending.byteOffset, pending.byteOffset + frameSize));
+          var big = new Uint8Array(pending.buffer.slice(pending.byteOffset, pending.byteOffset + frameSize));
           pending = pending.slice(frameSize);
+          var rgb = halveRgb(big), fine = grayOf(big, FW * FH);
           if (idx % FPS === 0 && idx / FPS < seconds) thumbnail(rgb, thumbs, (idx / FPS) * TSIZE);
           var cur = toGray(rgb);
           var curHalf = downsample(cur);
           if (prev && idx - 1 < total) out[idx - 1] = frameMotion(prev, cur, prevHalf, curHalf);
+          // Where the coarse reading saw nothing, a small jolt of the whole picture.
+          if (prevFine && idx - 1 < total && out[idx - 1] === 0) {
+            var js = fineShift(prevFine, fine);
+            if (js && js.d >= JOLT_PX) jolts.push([idx - 1, Math.max(JOLT_PCT, 100 * js.d / FW * FPS)]);
+          }
+          prevFine = fine;
           // The second-apart reading belongs to the middle of its window. It only counts where the short readings in
           // the window saw no move (zero at both ends, never two in a row: a creep can tick over a pixel now and
           // then), so a real move's own readings never spill half a second either side of it.
@@ -311,6 +386,11 @@
       p.on("close", function (code) {
         if (code !== 0 && idx === 0) return reject(new Error("ffmpeg could not read video " + mediaPath + ": " + err.trim()));
         if (idx > 1 && idx - 1 < total) out[idx - 1] = out[idx - 2]; // last frame has no successor
+        // A jolt is one step; it covers its neighbours too, so the planner's smoothing (a median over ~0.8 s,
+        // against one-frame glitches) keeps it and the cut leaves before it.
+        jolts.forEach(function (j) {
+          for (var k = Math.max(0, j[0] - 1); k <= Math.min(total - 1, j[0] + 1); k++) if (!(out[k] >= j[1])) out[k] = j[1];
+        });
         try { fs.writeFileSync(file, Buffer.from(out.buffer)); fs.writeFileSync(tfile, Buffer.from(thumbs.buffer)); } catch (e) { /* ignore */ }
         resolve({ values: out, thumbs: thumbs });
       });

@@ -98,10 +98,11 @@ test("motion analyzer separates camera moves from people moving in frame", { ski
   cp.spawnSync("ffmpeg", ["-loglevel", "error", "-y", "-f", "lavfi", "-i",
     "nullsrc=s=200x240,geq=lum='random(1)*255':cb=90:cr=170,gblur=sigma=3", "-frames:v", "1", subj]);
   // 0-3 s: camera still, "person" moving around; 3-5 s: fast pan; 5-6 s: slow drift; 6-9 s: still;
-  // 9-13 s: a creep too slow to see between neighbouring frames (4 px/s); 13-15 s: still.
+  // 9-13 s: a creep too slow to see between neighbouring frames (4 px/s); 13-15 s: still, but at 14 s a 1 px
+  // knock (someone leaning on the dolly rail): too small for the coarse reading, caught as a jolt.
   const r = cp.spawnSync("ffmpeg", ["-loglevel", "error", "-y", "-loop", "1", "-framerate", "30", "-t", "15", "-i", bg,
     "-loop", "1", "-framerate", "30", "-t", "15", "-i", subj, "-filter_complex",
-    "[0]crop=640:360:x='100+150*clip(t-3,0,2)+12*clip(t-5,0,1)+4*clip(t-9,0,4)':y=100[b];[b][1]overlay=x='if(lt(t,3),220+90*sin(t*4),220)':y=60[v]",
+    "[0]crop=640:360:x='100+150*clip(t-3,0,2)+12*clip(t-5,0,1)+4*clip(t-9,0,4)':y='100+gte(t,14)':exact=1[b];[b][1]overlay=x='if(lt(t,3),220+90*sin(t*4),220)':y=60[v]",
     "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", vid]);
   assert.equal(r.status, 0, String(r.stderr));
   const m = await M.analyzeTrack({ clips: [{ startSec: 0, endSec: 15, inPointSec: 0, mediaPath: vid }] }, 15, {});
@@ -111,8 +112,12 @@ test("motion analyzer separates camera moves from people moving in frame", { ski
   assert.ok(avg(3.3, 4.7) > 15, "fast pan: " + avg(3.3, 4.7));       // 150 px/s on 640 px = 23 %/s
   assert.ok(avg(5.2, 5.8) > 0.8 && avg(5.2, 5.8) < 6, "slow drift: " + avg(5.2, 5.8)); // 12 px/s = 1.9 %/s
   assert.ok(avg(6.8, 8.3) < steady, "still again: " + avg(6.8, 8.3));
-  assert.ok(avg(9.8, 12.2) > steady && avg(9.8, 12.2) < 1.2, "slow creep: " + avg(9.8, 12.2)); // 4 px/s = 0.6 %/s
-  assert.ok(avg(13.8, 14.5) < steady, "still at the end: " + avg(13.8, 14.5));
+  // 4 px/s = 0.6 %/s; it moves in whole-pixel steps here, which also read as small knocks: slow either way, never a big move.
+  assert.ok(avg(9.8, 12.2) > steady && avg(9.8, 12.2) < D.DEFAULT_STYLE.fastMinPct, "slow creep: " + avg(9.8, 12.2));
+  assert.ok(avg(13.3, 13.7) < steady, "still before the knock: " + avg(13.3, 13.7));
+  const knock = Array.from(m.values.slice(Math.round(13.8 / m.hopSec), Math.round(14.3 / m.hopSec)));
+  assert.ok(Math.max(...knock) >= 1.2, "the knock reads as a move: " + knock.map((x) => x.toFixed(2)).join(" "));
+  assert.ok(avg(14.5, 14.9) < steady, "still after the knock: " + avg(14.5, 14.9));
 });
 
 test("identical frames never read as camera motion (incl. stripes / test patterns)", () => {

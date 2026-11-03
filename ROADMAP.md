@@ -100,6 +100,11 @@
 - **Dolly stays on the last person until it moves** (when there is no Who's in the shot reading), and a follow-cam shot that runs across a change of speaker is checked against whoever has the floor at each moment.
 - **Picture names checked by voice:** a long steady dolly stretch named after someone silent while another person talks is treated as on the talker. A follow-cam shot spanning several speakers is split per speaker, so monologue cutaways measure one person's turn. A brief aside over someone who carries on isn't crosstalk.
 
+## v0.21 (added)
+
+- **Knocks on the dolly count as movement:** a lean on the rail shifts the picture 2-3 px at full size in a fraction of a second, too small for the motion reading (it works at 160 px wide). The analyzer now also measures the whole picture's shift at 320 px, to a few hundredths of a pixel, and a knock reads as a slow move so the cut stays off the dolly there. Ep 245 had three between 14:17 and 14:27; on a static wide it never fired. Camera movement is analyzed again once (cache version 9).
+- **Label colours per camera:** each camera row has a Label picker (16 colours or none). By default the wide has none and the other cameras Rose, so on episodes where the 24-70 wide is camera 2 the wide no longer turns Rose. Multicam builds press each colour's Edit > Label shortcut; saved setups keep the colours. Replaces "Label camera 2 shots".
+
 ## v0.20 (added)
 
 - **Slow creep counts as movement:** the motion analyzer also compares frames a second apart wherever neighbouring frames show nothing, so a dolly creeping at 0.2-1.3 %/s (which used to read as steady) is seen; Steady below now defaults to 0.3 %/s (was 1.2) and goes down to 0.1. Camera movement is analyzed again once (cache version 8), about 15% slower.
