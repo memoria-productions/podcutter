@@ -202,6 +202,13 @@
           ", so PodCutter reads them there: " + state.config.cameras.filter(function (c) { return c.angle; }).map(function (c) { return c.name + " = angle " + c.angle; }).join(", ") + ".");
         log("Cameras switched to the nest's angles (their stacked tracks were empty).");
       }
+      // A camera on a nest angle builds as that angle (a saved setup can carry another episode's numbering).
+      var angleFixed = false;
+      state.config.cameras.forEach(function (c) {
+        var t = c.videoTrack >= NEST_BASE ? vtrack(c.videoTrack) : null;
+        if (t && t.angle && c.angle !== t.angle) { log("“" + c.name + "” is multicam angle " + t.angle + " (was set to " + c.angle + ")."); c.angle = t.angle; angleFixed = true; }
+      });
+      if (angleFixed) saveConfig();
       var wideFix = enforceWide();
       if (wideFix) { saveConfig(); setNote(($("setupNote").textContent ? $("setupNote").textContent + " " : "") + wideFix); log(wideFix); }
       var fixedN = fixChannels(state.config, info);
@@ -742,7 +749,7 @@
       if (vt && vt.hidden && cm.enabled !== false) role += " \u00B7 eye off in the sequence (the cut turns it on)";
       row.appendChild(el("div", { class: "row-main" }, [
         name,
-        select(trackOptions("video"), cm.videoTrack, function (v) { cm.videoTrack = +v; changed(); }),
+        select(trackOptions("video"), cm.videoTrack, function (v) { cm.videoTrack = +v; var t = vtrack(cm.videoTrack); cm.angle = t && t.virtual ? t.angle : undefined; renderCameras(); changed(); }),
         el("span", { class: "muted small", text: role }),
         trashButton("Remove this camera", function () {
           confirmBox(row, "Remove camera \u201C" + cm.name + "\u201D? PodCutter won't cut to it.", "Remove", function () {
@@ -1686,7 +1693,7 @@
 
   function renderRecut() {
     var rec = copyFor(state.seq);
-    $("recutRow").classList.toggle("hidden", !rec || !inPremiere);
+    $("recutRow").classList.toggle("hidden", !rec || !inPremiere || usesNest());
     $("btnRecut").textContent = rec ? "Recut \u201C" + rec.name + "\u201D" : "Recut last copy";
     $("btnRecut").disabled = state.busy || !rec || !state.result;
     $("btnUndoRecut").disabled = state.busy || !rec || rec.history.length < 2;
@@ -2431,6 +2438,10 @@
     $("btnAnalyze").disabled = b || !state.seq;
     $("btnMarkers").disabled = b || !has || !inPremiere;
     $("btnApply").disabled = b || !has || !inPremiere;
+    // Cameras on multicam angles: Build as multicam is the build (Build cut on a copy only switches stacked tracks).
+    var nest = usesNest();
+    $("btnApply").classList.toggle("hidden", nest);
+    $("btnBuildMc").classList.toggle("primary", nest);
     $("btnClearMarkers").disabled = b || !inPremiere;
     $("btnExportPlan").disabled = b || !has || !hasNode;
     $("btnBuildMc").disabled = b || !has || !inPremiere;

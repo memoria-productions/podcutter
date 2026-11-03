@@ -100,6 +100,11 @@
 - **Dolly stays on the last person until it moves** (when there is no Who's in the shot reading), and a follow-cam shot that runs across a change of speaker is checked against whoever has the floor at each moment.
 - **Picture names checked by voice:** a long steady dolly stretch named after someone silent while another person talks is treated as on the talker. A follow-cam shot spanning several speakers is split per speaker, so monologue cutaways measure one person's turn. A brief aside over someone who carries on isn't crosstalk.
 
+## v0.19.1 (added)
+
+- **Build as multicam is the build for multicam angles:** with cameras on a multicam's angles it's the blue button, and Build cut on a copy and Recut (stacked tracks only) are hidden.
+- **Angle numbers follow the track:** a saved setup could carry another episode's angle number (ep 245: the 24-70 on angle 2 labelled angle 1), which would have typed the wrong camera. Scan, and picking a track, set it from the track.
+
 ## v0.19 (added)
 
 - **The 24-70 is always the wide.** Scan reads each camera's lens from Sony's metadata (the sidecar, or the copy inside the MP4) and sets the 24-70 camera up as the static wide, on whichever track or multicam angle it lands; with two cameras the other becomes the follow cam with Check for movement. Camera rows show the lens. Undo multicam cut goes back to the wide's angle (was always camera 1). A stacked 24-70 above V1 is warned about and built unlayered.
