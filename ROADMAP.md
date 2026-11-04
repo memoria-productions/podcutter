@@ -104,6 +104,7 @@
 
 - **Knocks on the dolly count as movement:** a lean on the rail shifts the picture 2-3 px at full size in a fraction of a second, too small for the motion reading (it works at 160 px wide). The analyzer now also measures the whole picture's shift at 320 px, to a few hundredths of a pixel, and a knock reads as a slow move so the cut stays off the dolly there. Ep 245 had three between 14:17 and 14:27; on a static wide it never fired. Camera movement is analyzed again once (cache version 9).
 - **Label colours per camera:** each camera row has a Label picker (16 colours or none). By default the wide has none and the other cameras Rose, so on episodes where the 24-70 wide is camera 2 the wide no longer turns Rose. Multicam builds press each colour's Edit > Label shortcut; saved setups keep the colours. Replaces "Label camera 2 shots".
+- **0.21.1:** Scan no longer freezes the panel. The label note looked up the Premiere shortcuts file several times on every camera redraw, each time launching `reg query` and re-reading the .kys; now the Documents folder is looked up once and the file is parsed once until Premiere saves it again.
 
 ## v0.20 (added)
 

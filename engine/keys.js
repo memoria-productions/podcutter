@@ -71,15 +71,21 @@
    * Where Windows really keeps Documents. Folder redirection (e.g. to a network share) moves it away from
    * %USERPROFILE%\Documents, and Premiere follows the redirect.
    */
+  // Asked once per session: reg.exe is a process launch, and the panel looks up shortcuts on every redraw.
+  var redirectedDocs;
   function documentsFolders(extra) {
     var list = [].concat(extra || []);
     if (process.platform === "win32") {
-      try {
-        var out = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders" /v Personal',
-          { encoding: "utf8", windowsHide: true, timeout: 5000 });
-        var m = /Personal\s+REG_\w+\s+(.+)/.exec(out);
-        if (m) list.unshift(m[1].trim());
-      } catch (e) { /* fall back to the usual places */ }
+      if (redirectedDocs === undefined) {
+        redirectedDocs = null;
+        try {
+          var out = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders" /v Personal',
+            { encoding: "utf8", windowsHide: true, timeout: 5000 });
+          var m = /Personal\s+REG_\w+\s+(.+)/.exec(out);
+          if (m) redirectedDocs = m[1].trim();
+        } catch (e) { /* fall back to the usual places */ }
+      }
+      if (redirectedDocs) list.unshift(redirectedDocs);
     }
     if (process.env.USERPROFILE) list.push(path.join(process.env.USERPROFILE, "Documents"));
     return list.filter(function (d, i) { return d && list.indexOf(d) === i; });

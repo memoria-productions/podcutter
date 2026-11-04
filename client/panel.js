@@ -1567,7 +1567,7 @@
   function labelKeyFor(n) {
     var k = cutKeys();
     if (!k || !k.file) return null;
-    try { var key = K.labelKey(K.parseShortcuts(fs.readFileSync(k.file.path, "utf8")), n); return key.usable ? key : null; }
+    try { var key = K.labelKey(shortcutsIn(k.file), n); return key.usable ? key : null; }
     catch (e) { return null; }
   }
   /** Under the label switch: the shortcuts a multicam build will press, or which colours still need one. */
@@ -1577,8 +1577,9 @@
     var colors = [];
     state.config.cameras.forEach(function (c) { var n = camLabel(c); if (c.enabled !== false && n >= 0 && colors.indexOf(n) < 0) colors.push(n); });
     if (!colors.length) { note.textContent = "No camera has a label colour (set one under Cameras)."; return; }
-    var have = colors.filter(function (n) { return labelKeyFor(n); }), missing = colors.filter(function (n) { return !labelKeyFor(n); });
-    note.textContent = (have.length ? "A multicam build presses " + have.map(function (n) { return labelKeyFor(n).label + " (" + labelName(n) + ")"; }).join(", ") + ". " : "") +
+    var keyOf = {}; colors.forEach(function (n) { keyOf[n] = labelKeyFor(n); });
+    var have = colors.filter(function (n) { return keyOf[n]; }), missing = colors.filter(function (n) { return !keyOf[n]; });
+    note.textContent = (have.length ? "A multicam build presses " + have.map(function (n) { return keyOf[n].label + " (" + labelName(n) + ")"; }).join(", ") + ". " : "") +
       (missing.length ? "Give Edit > Label > " + missing.map(labelName).join(" / ") + " a shortcut (Edit > Keyboard Shortcuts) so a multicam build can press it; scripts often can't set the colour." : "");
   }
 
@@ -2128,8 +2129,15 @@
     if (!hasNode || !K || !state.docsDir) return null;
     var files = K.findShortcutFiles([path.dirname(state.docsDir)]);
     if (!files.length) return { file: null, cams: [] };
-    try { return { file: files[0], cams: K.cutToCameraKeys(K.parseShortcuts(fs.readFileSync(files[0].path, "utf8")), 4) }; }
+    try { return { file: files[0], cams: K.cutToCameraKeys(shortcutsIn(files[0]), 4) }; }
     catch (e) { return { file: files[0], cams: [], error: e.message }; }
+  }
+  /** A .kys file's shortcuts, parsed once until Premiere saves it again. */
+  var kysCache = null;
+  function shortcutsIn(file) {
+    if (!kysCache || kysCache.path !== file.path || kysCache.mtime !== file.mtime)
+      kysCache = { path: file.path, mtime: file.mtime, parsed: K.parseShortcuts(fs.readFileSync(file.path, "utf8")) };
+    return kysCache.parsed;
   }
   function renderKbdKeys() {
     var box = $("kbdKeys"); box.innerHTML = "";
