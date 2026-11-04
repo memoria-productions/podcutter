@@ -36,7 +36,7 @@ if (-not (Test-Path (Join-Path $source "CSXS\manifest.xml"))) {
   if (Test-Path (Join-Path $PSScriptRoot "..\CSXS\manifest.xml")) {
     Say "This is the PodCutter *source code*, not the installer package." Red
     Say "Download PodCutter-x.y.z-Windows.zip from the Assets list on:" Yellow
-    Say "  https://github.com/memoria-productions/poddirector/releases/latest" Yellow
+    Say "  https://github.com/memoria-productions/podcutter/releases/latest" Yellow
   } else {
     Say "Can't find the PodCutter folder next to this installer ($source)." Red
   }

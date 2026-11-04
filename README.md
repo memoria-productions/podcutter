@@ -63,7 +63,7 @@ Every push runs the tests. Every push to `main` also builds the Windows zip, ins
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Share this link for the newest installer: https://github.com/memoria-productions/poddirector/releases/latest
+Share this link for the newest installer: https://github.com/memoria-productions/podcutter/releases/latest
 
 ## Tuning with Claude
 

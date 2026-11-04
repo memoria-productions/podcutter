@@ -9,7 +9,8 @@ The user is David Ward (Memoria Press, podcast "Classical et cetera"). Fuller st
 - The `PD.*` host namespace, `PD_UI`, and the `pd.` storage keys.
 - The `[PD]` marker prefixes, so Clear markers finds old ones.
 - The temp cache folder names and the `poddirector-setup` file kind.
-- The GitHub repo `memoria-productions/poddirector` (`updater.DEFAULT_REPO`), and the local folder `#poddirector`.
+
+The GitHub repo was renamed `memoria-productions/poddirector` → `memoria-productions/podcutter` (`updater.DEFAULT_REPO`) on 2026-11-04, and the local folder `#poddirector` → `#podcutter`. GitHub redirects the old name. The updater follows redirects from 0.21.3; panels on 0.21.2 or older get a 301 and need one manual install of 0.21.3 or later.
 
 Upgrading from the old name:
 - Releases 0.18.0–0.21.1 also attached the package as `PodDirector-…zip` for pre-rename updaters. From 0.21.2 only `PodCutter-…zip` is attached; a panel still on 0.17 or older must be installed by hand. The updater still accepts either name.

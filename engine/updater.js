@@ -19,7 +19,9 @@
   var req = typeof require === "function" ? require : null;
   var fs = req && req("fs"), path = req && req("path"), os = req && req("os"), cp = req && req("child_process"), https = req && req("https");
 
-  var DEFAULT_REPO = "memoria-productions/poddirector";
+  // The repo was poddirector until it was renamed podcutter. GitHub redirects the old name, but until the rename
+  // the new one is a 404, so the update check tries the new name and falls back to the old one.
+  var DEFAULT_REPO = "memoria-productions/podcutter", OLD_REPO = "memoria-productions/poddirector";
   // PodCutter was called PodDirector up to 0.17. Releases from 0.18 attach the package under both names, because
   // the updater in installed PodDirector panels only recognises "PodDirector-…"; this one takes either, preferring
   // the new name.
@@ -32,9 +34,15 @@
     return 0;
   }
 
-  function getJson(url) {
+  function getJson(url, hops) {
     return new Promise(function (resolve, reject) {
+      if ((hops || 0) > 5) return reject(new Error("Too many redirects"));
       var r = https.get(url, { headers: { "User-Agent": "PodCutter-updater", Accept: "application/vnd.github+json" } }, function (res) {
+        // A renamed repository answers with a redirect to its new name.
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          return resolve(getJson(res.headers.location, (hops || 0) + 1));
+        }
         var body = "";
         res.on("data", function (d) { body += d; });
         res.on("end", function () {
@@ -50,7 +58,12 @@
 
   /** Latest release on GitHub: { version, url, notes, source } */
   function checkGitHub(repo) {
-    return getJson("https://api.github.com/repos/" + (repo || DEFAULT_REPO) + "/releases/latest").then(function (rel) {
+    var latest = function (r) { return getJson("https://api.github.com/repos/" + r + "/releases/latest"); };
+    var got = repo ? latest(repo) : latest(DEFAULT_REPO).catch(function (e) {
+      if (!/No public release/.test(e.message)) throw e;
+      return latest(OLD_REPO);
+    });
+    return got.then(function (rel) {
       var asset = (rel.assets || []).filter(function (a) { return ZIP_RE.test(a.name); })
         .sort(function (a, b) { return preferNewName(a.name, b.name); })[0];
       if (!asset) throw new Error("The latest release has no Windows package attached yet.");
