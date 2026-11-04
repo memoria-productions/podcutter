@@ -62,7 +62,6 @@ jobs:
           $ext = Join-Path $env:APPDATA "Adobe\CEP\extensions\PodCutter"
           if (-not (Test-Path "$ext\CSXS\manifest.xml")) { throw "extension not installed" }
           if (Test-Path (Join-Path $env:APPDATA "Adobe\CEP\extensions\PodDirector")) { throw "old PodDirector panel not removed" }
-          if (-not (Test-Path dist/PodDirector-*-Windows.zip)) { throw "no PodDirector-named package for pre-rename updaters" }
           if ((Get-ItemProperty "HKCU:\Software\Adobe\CSXS.11").PlayerDebugMode -ne "1") { throw "PlayerDebugMode not set" }
       - name: Waveform analysis + offline transcription with the bundled Windows binaries
         shell: pwsh
@@ -91,4 +90,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.zip \
             --title "PodCutter $GITHUB_REF_NAME" \
-            --notes "Windows installer: download PodCutter-*-Windows.zip, unzip, double-click **Install PodCutter.bat**, then open Window > Extensions > PodCutter in Premiere Pro. See docs/USER_GUIDE.md. (PodCutter was called PodDirector: the PodDirector-*.zip is the same package, for panels installed before the rename to update from.)"
+            --notes "Windows installer: download PodCutter-${GITHUB_REF_NAME#v}-Windows.zip, unzip, double-click **Install PodCutter.bat**, then open Window > Extensions > PodCutter in Premiere Pro. See docs/USER_GUIDE.md."

@@ -12,11 +12,9 @@ The user is David Ward (Memoria Press, podcast "Classical et cetera"). Fuller st
 - The GitHub repo `memoria-productions/poddirector` (`updater.DEFAULT_REPO`), and the local folder `#poddirector`.
 
 Upgrading from the old name:
-- Releases attach the package as both `PodCutter-…zip` and `PodDirector-…zip`, because installed PodDirector updaters only match the old name.
+- Releases 0.18.0–0.21.1 also attached the package as `PodDirector-…zip` for pre-rename updaters. From 0.21.2 only `PodCutter-…zip` is attached; a panel still on 0.17 or older must be installed by hand. The updater still accepts either name.
 - `install.ps1` removes the old `extensions\PodDirector` folder.
 - The panel copies `Documents\PodDirector` to `Documents\PodCutter` once, skipping the research data in `edits`, `motion` and `compare`.
-- Keep the bridge asset for a few releases.
-
 ## Layout
 - `engine/` pure JS, used by both the panel and Node. Exports work in both:
   - `director.js` — the cutting engine (`plan`, `planRange`, `toEditPayload`, presets, `VERSION`);

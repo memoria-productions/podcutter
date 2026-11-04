@@ -24,8 +24,3 @@ cp "$ROOT/docs/USER_GUIDE.md" "$OUT/PodCutter User Guide.md"
 
 (cd "$ROOT/dist" && rm -f "PodCutter-$VERSION-Windows.zip" && zip -qr -9 "PodCutter-$VERSION-Windows.zip" "PodCutter-$VERSION-Windows")
 echo "Built $ROOT/dist/PodCutter-$VERSION-Windows.zip ($(du -h "$ROOT/dist/PodCutter-$VERSION-Windows.zip" | cut -f1))"
-
-# Bridge for panels installed before the rename: their updater only recognises "PodDirector-x.y.z-Windows.zip",
-# so the same package is attached under that name too. It installs PodCutter and removes the old panel.
-cp "$ROOT/dist/PodCutter-$VERSION-Windows.zip" "$ROOT/dist/PodDirector-$VERSION-Windows.zip"
-echo "Also wrote $ROOT/dist/PodDirector-$VERSION-Windows.zip (same package, for updaters from before the rename)"

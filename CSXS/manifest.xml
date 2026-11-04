@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ExtensionManifest Version="11.0" ExtensionBundleId="com.poddirector.panel" ExtensionBundleVersion="0.21.1"
+<ExtensionManifest Version="11.0" ExtensionBundleId="com.poddirector.panel" ExtensionBundleVersion="0.21.2"
                    ExtensionBundleName="PodCutter"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ExtensionList>
-    <Extension Id="com.poddirector.panel" Version="0.21.1"/>
+    <Extension Id="com.poddirector.panel" Version="0.21.2"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>
