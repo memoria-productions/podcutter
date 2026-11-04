@@ -136,6 +136,19 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .sug-nudge { margin-left: auto; display: flex; gap: 2px; }
 .sug-nudge button { font-size: 10px; padding: 0 4px; }
 .sug-actions { margin: 4px 0 2px; }
+.sug-group { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 6px 0 0; }
+.sug.note { border-left-color: var(--accent, #4f8cff); cursor: pointer; }
+.sug-join { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.sug-join b { color: var(--text, #ddd); font-weight: 600; }
+.bd { margin-top: 4px; display: grid; gap: 4px; }
+.bd-timeline { display: grid; gap: 1px; border-left: 2px solid #444; padding-left: 6px; }
+.bd-line { display: flex; gap: 6px; font-size: 11px; cursor: pointer; }
+.bd-line .time, .bd-keep .time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bd-line .tag { color: var(--muted); min-width: 56px; }
+.bd-line:hover { color: #fff; }
+.bd-choice { display: flex; gap: 4px; }
+.bd-keep { display: flex; gap: 6px; align-items: baseline; font-size: 11px; cursor: default; }
+.bd-leak { font-size: 11px; color: #ffb3b3; }
 
 .kv { display: grid; grid-template-columns: 80px 1fr; gap: 6px; margin: 4px 0; }
 .status { position: fixed; left: 0; right: 0; bottom: 0; background: #161616; border-top: 1px solid var(--line); padding: 6px 10px; display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; align-items: center; z-index: 6; }

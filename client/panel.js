@@ -1831,7 +1831,7 @@
   }
 
   function setSegments(segs, msg) {
-    state.tx.segments = segs; state.tx.off = {}; state.tx.nudges = {};
+    state.tx.segments = segs; state.tx.off = {}; state.tx.nudges = {}; state.tx.surgical = {}; state.tx.keeps = {}; state.tx.expand = {};
     $("txStatus").textContent = msg || "";
     runCleanup();
   }
@@ -1842,11 +1842,18 @@
     return state.result.speech.map(function (r) { return { speakerId: names[r.speakerId] || r.speakerId, runs: r.runs }; });
   }
 
+  /** First names of the people on mic, for "Okay, so Kyle, …" restarts and "Any thoughts, Paul?" handoffs. */
+  function speakerNames() {
+    return state.config ? state.config.speakers.filter(function (s) { return s.enabled !== false && !/^(speaker|mic|vox|voice|audio|a)\s*\d+$/i.test(s.name); })
+      .map(function (s) { return s.name; }) : [];
+  }
+
   function runCleanup() {
     if (!state.tx.segments) return;
     var segs = T.assignSpeakers(state.tx.segments, speakerRunsByName());
-    var res = T.analyze(segs, state.cleanupOpts);
+    var res = T.analyze(segs, Object.assign({}, state.cleanupOpts, { names: speakerNames() }));
     state.tx.suggestions = res.suggestions;
+    state.tx.notes = res.notes || [];
     state.tx.intro = T.introduction(segs, { showName: state.cleanupOpts.showName,
       names: state.config ? state.config.speakers.filter(function (s) { return s.enabled !== false; }).map(function (s) { return s.name; }) : [] });
     renderSuggestions(); renderIntro(); refreshVizCleanup(); setButtons();
@@ -1921,11 +1928,36 @@
     var n = state.tx.nudges[s.id] || [0, 0];
     return [Math.max(0, s.startSec + n[0]), Math.max(s.startSec + n[0] + 0.1, s.endSec + n[1])];
   }
-  function acceptedCuts() {
-    return state.tx.suggestions.filter(function (s) { return !state.tx.off[s.id]; }).map(function (s) {
-      var r = sugRange(s); return { startSec: r[0], endSec: r[1] };
+  /** A breakdown's keep passages the editor has ticked (the longest two start ticked). */
+  function keepOn(k) { var v = (state.tx.keeps || {})[k.id]; return v === undefined ? !!k.on : v; }
+  function isSurgical(s) { return s.type === "breakdown" && !!(state.tx.surgical || {})[s.id] && (s.keeps || []).some(keepOn); }
+  /** The ranges a suggestion removes: one, or (surgical) the breakdown minus the passages kept. Leaks stay cut. */
+  function cutPieces(s) {
+    var r = sugRange(s);
+    if (!isSurgical(s)) return [r];
+    var pieces = [], at = r[0];
+    s.keeps.filter(keepOn).sort(function (a, b) { return a.startSec - b.startSec; }).forEach(function (k) {
+      if (k.startSec - at > 0.2) pieces.push([at, Math.min(k.startSec, r[1])]);
+      at = Math.max(at, k.endSec);
     });
+    if (r[1] - at > 0.2) pieces.push([at, r[1]]);
+    return pieces.filter(function (pc) { return pc[1] - pc[0] > 0.2; });
   }
+  function acceptedCuts() {
+    var out = [];
+    state.tx.suggestions.filter(function (s) { return !state.tx.off[s.id]; }).forEach(function (s) {
+      cutPieces(s).forEach(function (pc) { out.push({ startSec: pc[0], endSec: pc[1] }); });
+    });
+    return out;
+  }
+  function cutSecs(s) { return cutPieces(s).reduce(function (a, pc) { return a + pc[1] - pc[0]; }, 0); }
+  /** 32:20 or 1:02:05 — how editors read times by ear. */
+  function mmss(t) {
+    t = Math.max(0, Math.round(t));
+    var h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, x = t % 60;
+    return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (x < 10 ? "0" : "") + x;
+  }
+  function lengthText(sec) { return sec >= 90 ? "about " + (Math.round(sec / 30) / 2) + " min" : Math.round(sec) + " s"; }
   function refreshVizCleanup() {
     if (viz.data) { viz.data.cleanup = acceptedCuts(); viz.render(); }
     if (state.result) debounce("plan", replan, 150); // camera must change across each accepted cut
@@ -1935,41 +1967,114 @@
     var box = $("sugList"); box.innerHTML = "";
     var list = state.tx.suggestions;
     var on = list.filter(function (s) { return !state.tx.off[s.id]; });
-    var secs = on.reduce(function (a, s) { var r = sugRange(s); return a + r[1] - r[0]; }, 0);
-    $("sugCount").textContent = list.length ? on.length + " of " + list.length + " selected · " + secs.toFixed(0) + " s" : "";
-    if (!list.length) { box.appendChild(el("div", { class: "muted", text: state.tx.segments ? "Nothing flagged. Lower Min confidence to see weaker matches." : "No transcript loaded." })); return; }
-    list.forEach(function (s) {
-      var r = sugRange(s);
-      var conf = s.confidence >= 0.75 ? "" : s.confidence >= 0.55 ? " mid" : " low";
-      var item = el("div", { class: "sug" + (state.tx.off[s.id] ? " off" : ""), onclick: function (e) {
-        if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON") return;
-        seek(r[0]);
-      } });
-      var box2 = el("input", { type: "checkbox" }); box2.checked = !state.tx.off[s.id];
-      box2.addEventListener("change", function () { state.tx.off[s.id] = !box2.checked; renderSuggestions(); refreshVizCleanup(); setButtons(); });
-      function nudge(which, d) {
-        return el("button", { class: "btn ghost", text: (which === 0 ? "←" : "") + (d < 0 ? "−" : "+") + (which === 1 ? "→" : ""),
-          title: (which === 0 ? "Start " : "End ") + (d < 0 ? "earlier" : "later") + " by 0.5 s",
-          onclick: function () { var n = state.tx.nudges[s.id] || [0, 0]; n[which] += d; state.tx.nudges[s.id] = n; renderSuggestions(); refreshVizCleanup(); } });
-      }
-      item.appendChild(el("div", { class: "sug-top" }, [
-        box2,
-        el("span", { class: "time", text: fmt(r[0]) + " – " + fmt(r[1]) }),
-        el("span", { class: "badge" + conf, text: s.type + " " + Math.round(s.confidence * 100) + "%" }),
-        el("span", { class: "sug-nudge" }, [nudge(0, -0.5), nudge(0, 0.5), nudge(1, -0.5), nudge(1, 0.5)])
-      ]));
-      item.appendChild(el("div", { class: "small", text: s.reason }));
-      // The show's real start/end: set the sequence In/Out there so the multicam pass skips the chatter too.
-      if (s.showStartSec !== undefined || s.showEndSec !== undefined) {
-        var isStart = s.showStartSec !== undefined, at = isStart ? s.showStartSec : s.showEndSec;
-        item.appendChild(el("div", { class: "sug-actions" }, [el("button", { class: "btn ghost small",
-          text: (isStart ? "Set In point at the welcome (" : "Set Out point at the sign-off (") + fmt(at) + ")",
-          title: "Sets the sequence " + (isStart ? "In" : "Out") + " point so Analyze and the cut skip the " + (isStart ? "pre-show" : "post-show") + " chat",
-          onclick: function () { setShowEdge(isStart, at); } })]));
-      }
-      item.appendChild(el("div", { class: "sug-text", text: s.text }));
-      box.appendChild(item);
+    var secs = on.reduce(function (a, s) { return a + cutSecs(s); }, 0);
+    $("sugCount").textContent = list.length ? on.length + " of " + list.length + " selected · " + lengthText(secs) : "";
+    if (!list.length) { box.appendChild(el("div", { class: "muted", text: state.tx.segments ? "Nothing flagged. Lower Min confidence to see weaker matches." : "No transcript loaded." })); }
+    // Most important first: what should never air, then the tidy-ups.
+    var groups = [["major", "Major cuts", "Should never air: production breakdowns, producer or internal talk, pre- and post-show chat."],
+                  ["trim", "Smaller trims", "Restarts, dead handoffs, stumbles. Listen around each before cutting."]];
+    groups.forEach(function (g) {
+      var items = list.filter(function (s) { return (s.tier || "trim") === g[0]; });
+      if (!items.length) return;
+      box.appendChild(el("div", { class: "sug-group", title: g[2], text: g[1] + " (" + items.length + ")" }));
+      items.forEach(renderSuggestion);
     });
+    (state.tx.notes || []).forEach(function (n) {
+      if (n.type !== "cold-open") return;
+      box.appendChild(el("div", { class: "sug-group", text: "Intentional structure" }));
+      box.appendChild(el("div", { class: "sug note", onclick: function () { seek(n.matchStartSec); } }, [
+        el("div", { class: "small", text: "Cold open " + mmss(n.startSec) + "–" + mmss(n.endSec) + " repeats " + mmss(n.matchStartSec) + "–" + mmss(n.matchEndSec) +
+          ". Keep that exchange (or the teaser) so it still works after the edit." }),
+        el("div", { class: "sug-text", text: "\u201c" + n.text + "\u201d" })
+      ]));
+    });
+  }
+
+  function renderSuggestion(s) {
+    var box = $("sugList");
+    var r = sugRange(s);
+    var conf = s.confidence >= 0.75 ? "" : s.confidence >= 0.55 ? " mid" : " low";
+    var item = el("div", { class: "sug" + (state.tx.off[s.id] ? " off" : ""), onclick: function (e) {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON") return;
+      seek(r[0]);
+    } });
+    var box2 = el("input", { type: "checkbox" }); box2.checked = !state.tx.off[s.id];
+    box2.addEventListener("change", function () { state.tx.off[s.id] = !box2.checked; renderSuggestions(); refreshVizCleanup(); setButtons(); });
+    function nudge(which, d) {
+      return el("button", { class: "btn ghost", text: (which === 0 ? "←" : "") + (d < 0 ? "−" : "+") + (which === 1 ? "→" : ""),
+        title: (which === 0 ? "Start " : "End ") + (d < 0 ? "earlier" : "later") + " by 0.5 s",
+        onclick: function () { var n = state.tx.nudges[s.id] || [0, 0]; n[which] += d; state.tx.nudges[s.id] = n; renderSuggestions(); refreshVizCleanup(); } });
+    }
+    item.appendChild(el("div", { class: "sug-top" }, [
+      box2,
+      el("span", { class: "time", text: fmt(r[0]) + " – " + fmt(r[1]) }),
+      el("span", { class: "badge" + conf, text: s.type + " " + Math.round(s.confidence * 100) + "%" }),
+      el("span", { class: "sug-nudge" }, [nudge(0, -0.5), nudge(0, 0.5), nudge(1, -0.5), nudge(1, 0.5)])
+    ]));
+    item.appendChild(el("div", { class: "small", text: s.reason }));
+    if (s.type === "breakdown") renderBreakdown(item, s);
+    // Test the join: does the last line before and the first line after read as one conversation?
+    if (s.joinBefore || s.joinAfter) item.appendChild(el("div", { class: "sug-join", title: "The last line before the cut and the first line after it" }, [
+      el("span", { text: s.joinBefore ? "\u201c" + s.joinBefore + "\u201d" : "(start)" }), el("b", { text: " \u2192 " }),
+      el("span", { text: s.joinAfter ? "\u201c" + s.joinAfter + "\u201d" : "(end)" })]));
+    // The show's real start/end: set the sequence In/Out there so the multicam pass skips the chatter too.
+    if (s.showStartSec !== undefined || s.showEndSec !== undefined) {
+      var isStart = s.showStartSec !== undefined, at = isStart ? s.showStartSec : s.showEndSec;
+      item.appendChild(el("div", { class: "sug-actions" }, [el("button", { class: "btn ghost small",
+        text: (isStart ? "Set In point at the welcome (" : "Set Out point at the sign-off (") + fmt(at) + ")",
+        title: "Sets the sequence " + (isStart ? "In" : "Out") + " point so Analyze and the cut skip the " + (isStart ? "pre-show" : "post-show") + " chat",
+        onclick: function () { setShowEdge(isStart, at); } })]));
+    }
+    if (s.type !== "breakdown") item.appendChild(el("div", { class: "sug-text", text: s.text }));
+    box.appendChild(item);
+  }
+
+  /** A long breakdown timeline: its first four and last three lines, and how many in between. */
+  function timelineShown(tl, all) {
+    if (all || tl.length <= 8) return tl;
+    return tl.slice(0, 4).concat([{ more: tl.length - 7 }], tl.slice(-3));
+  }
+  function joinText(s) {
+    return "“" + (s.joinBefore || "(start of recording)") + "” → “" + (s.joinAfter || "(end of recording)") + "”";
+  }
+
+  /** A breakdown's story: what set it off, the restart, the two ways to cut it, and where its topic is covered. */
+  function renderBreakdown(item, s) {
+    var d = el("div", { class: "bd" });
+    var whole = sugRange(s)[1] - sugRange(s)[0], surgical = isSurgical(s);
+    d.appendChild(el("div", { class: "small", text: "Removes " + lengthText(surgical ? cutSecs(s) : whole) +
+      (s.restart ? ". Clean restart at " + mmss(s.restart.sec) + ": \u201c" + s.restart.text + "\u201d" : ". No clean restart found: check where the conversation picks up.") }));
+    var tl = el("div", { class: "bd-timeline" }), open = (state.tx.expand || {})[s.id];
+    timelineShown(s.timeline, open).forEach(function (t) {
+      if (t.more) {
+        tl.appendChild(el("button", { class: "btn ghost small", text: "… " + t.more + " more — show all",
+          onclick: function (e) { e.stopPropagation(); state.tx.expand = state.tx.expand || {}; state.tx.expand[s.id] = true; renderSuggestions(); } }));
+        return;
+      }
+      tl.appendChild(el("div", { class: "bd-line", onclick: function (e) { e.stopPropagation(); seek(t.sec); } }, [
+        el("span", { class: "time", text: mmss(t.sec) }), el("span", { class: "tag", text: t.kind }), el("span", { text: t.text })]));
+    });
+    d.appendChild(tl);
+    if (s.keeps && s.keeps.length) {
+      var choice = el("div", { class: "bd-choice" });
+      [[false, "One cut", "Remove the whole stretch, start to restart"], [true, "Keep good passages", "Cut around the ticked passages; producer and internal talk stays cut"]].forEach(function (c) {
+        choice.appendChild(el("button", { class: "btn small" + (!!(state.tx.surgical || {})[s.id] === c[0] ? " primary" : " ghost"), text: c[1], title: c[2],
+          onclick: function (e) { e.stopPropagation(); state.tx.surgical = state.tx.surgical || {}; state.tx.surgical[s.id] = c[0]; renderSuggestions(); refreshVizCleanup(); } }));
+      });
+      d.appendChild(choice);
+      if ((state.tx.surgical || {})[s.id]) s.keeps.forEach(function (k) {
+        var cb = el("input", { type: "checkbox" }); cb.checked = keepOn(k);
+        cb.addEventListener("change", function () { state.tx.keeps = state.tx.keeps || {}; state.tx.keeps[k.id] = cb.checked; renderSuggestions(); refreshVizCleanup(); });
+        d.appendChild(el("label", { class: "bd-keep", onclick: function (e) { e.stopPropagation(); } }, [cb,
+          el("span", { class: "time", text: "keep " + mmss(k.startSec) + "\u2013" + mmss(k.endSec) }), el("span", { text: k.text })]));
+      });
+    }
+    (s.leaks || []).forEach(function (l) {
+      d.appendChild(el("div", { class: "bd-leak", text: "Always cut " + mmss(l.startSec) + ": " + l.reason }));
+    });
+    if (s.elsewhere && s.elsewhere.length) d.appendChild(el("div", { class: "small muted", text: "The topic comes up again: " +
+      s.elsewhere.map(function (e) { return "\u201c" + e.phrase + "\u201d at " + e.at.map(mmss).join(", "); }).join("; ") + " — check it's covered there." }));
+    item.appendChild(d);
   }
 
   var setShowEdge = guard(function (isStart, sec) {
@@ -2030,9 +2135,13 @@
 
   var markCuts = guard(function () {
     var list = state.tx.suggestions.filter(function (s) { return !state.tx.off[s.id]; });
-    var markers = list.map(function (s) {
-      var r = sugRange(s);
-      return { startSec: r[0], endSec: r[1], name: s.type, color: 1, comment: s.reason + "\n" + s.text };
+    var markers = [];
+    list.forEach(function (s) {
+      var pieces = cutPieces(s);
+      pieces.forEach(function (pc, i) {
+        markers.push({ startSec: pc[0], endSec: pc[1], name: s.type + (pieces.length > 1 ? " " + (i + 1) + "/" + pieces.length : ""), color: 1,
+          comment: s.reason + (s.restart ? "\nRestart: " + s.restart.text : "") + "\n" + s.text });
+      });
     });
     return callHost("clearMarkers", [MARK_CUT]).then(function () {
       return callHost("addMarkers", [JSON.stringify({ prefix: MARK_CUT, markers: markers })]);
@@ -2043,36 +2152,106 @@
   });
 
   function exportCsv() {
-    var list = state.tx.suggestions.filter(function (s) { return !state.tx.off[s.id]; }).map(function (s) {
-      var r = sugRange(s); var c = copy(s); c.startSec = r[0]; c.endSec = r[1]; return c;
+    var list = [];
+    state.tx.suggestions.filter(function (s) { return !state.tx.off[s.id]; }).forEach(function (s) {
+      var pieces = cutPieces(s);
+      pieces.forEach(function (pc, i) {
+        var c = copy(s); c.startSec = pc[0]; c.endSec = pc[1]; if (pieces.length > 1) c.id = s.id + "." + (i + 1); list.push(c);
+      });
     });
     var file = path.join(state.docsDir, safe(state.seq ? state.seq.name : "transcript") + ".cuts.csv");
     fs.writeFileSync(file, T.toCsv(list));
     status("Saved " + file, "ok");
   }
 
-  function copyForClaude() {
-    var lines = ["I'm editing a podcast in Premiere. Below are sections an automatic analyzer flagged for removal",
-      "(spoken edit cues, restarts, off-the-record talk). For each, tell me: keep or cut, and adjust the start/end",
-      "if the cut should begin or end elsewhere so the edit sounds natural. Then list any other spots in the transcript",
-      "that sound like they were meant to be cut.", "", "FLAGGED:"];
-    state.tx.suggestions.forEach(function (s) {
+  /**
+   * The edit report: major cuts first (with where to start, where to end and why the join works), then the
+   * smaller trims, then intentional structure. Times are sequence times, about ±2–5 s from the transcript.
+   */
+  function editReport() {
+    var list = state.tx.suggestions, L = [];
+    var major = list.filter(function (s) { return s.tier === "major"; }), trims = list.filter(function (s) { return s.tier !== "major"; });
+    major.forEach(function (s) {
       var r = sugRange(s);
-      lines.push("- " + s.id + " [" + fmt(r[0]) + " – " + fmt(r[1]) + "] " + s.type + " (" + Math.round(s.confidence * 100) + "%): " + s.reason);
+      if (s.type === "breakdown") {
+        L.push("## The main cut: about " + mmss(r[0]) + " to " + mmss(r[1]));
+        L.push("- Trigger: \u201c" + s.timeline[0].text + "\u201d");
+        timelineShown(s.timeline.slice(1)).forEach(function (t) { L.push(t.more ? "  - \u2026 " + t.more + " more" : "  - " + mmss(t.sec) + " (" + t.kind + "): \u201c" + t.text + "\u201d"); });
+        L.push(s.restart ? "- Clean restart at " + mmss(s.restart.sec) + ": \u201c" + s.restart.text + "\u201d" : "- No clean restart found: listen for where the conversation picks up.");
+        L.push("- Simplest option: one cut, " + mmss(r[0]) + "\u2013" + mmss(r[1]) + " (" + lengthText(r[1] - r[0]) + "). The join: " + joinText(s));
+        if (s.keeps && s.keeps.length) L.push("- Surgical option: keep " + s.keeps.filter(keepOn).map(function (k) { return mmss(k.startSec) + "\u2013" + mmss(k.endSec); }).join(" and ") + ", cut the rest.");
+        (s.leaks || []).forEach(function (l) { L.push("- Cut either way (" + mmss(l.startSec) + "): " + l.reason); });
+        if (s.elsewhere && s.elsewhere.length) L.push("- The topic comes up again: " + s.elsewhere.map(function (e) { return "\u201c" + e.phrase + "\u201d at " + e.at.map(mmss).join(", "); }).join("; "));
+        L.push("");
+      } else {
+        L.push("## Cut " + mmss(r[0]) + "\u2013" + mmss(r[1]) + " (" + lengthText(r[1] - r[0]) + "): " + s.reason);
+        L.push("- The join: " + joinText(s));
+        L.push("");
+      }
     });
-    lines.push("", "TRANSCRIPT:");
-    T.assignSpeakers(state.tx.segments, speakerRunsByName()).forEach(function (sg) {
-      lines.push("[" + fmt(sg.startSec) + "] " + (sg.speaker ? sg.speaker + ": " : "") + sg.text);
+    if (trims.length) {
+      L.push("## Smaller trims");
+      trims.forEach(function (s) { var r = sugRange(s); L.push("- " + mmss(r[0]) + "\u2013" + mmss(r[1]) + ": " + s.reason); });
+      L.push("");
+    }
+    (state.tx.notes || []).forEach(function (n) {
+      if (n.type === "cold-open") L.push("## Intentional structure", "- The cold open (" + mmss(n.startSec) + "\u2013" + mmss(n.endSec) + ") repeats " + mmss(n.matchStartSec) + "\u2013" + mmss(n.matchEndSec) + ": keep it working after the edit.", "");
     });
-    var text = lines.join("\n");
+    if (!L.length) L.push("Nothing flagged.");
+    L.push("Times come from the transcript and are about \u00b12\u20135 s: listen around each boundary before cutting.");
+    return L.join("\n");
+  }
+
+  function copyText(text, fileSuffix, what) {
     var ta = el("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
     var ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
     ta.remove();
     if (hasNode) {
-      var file = path.join(state.docsDir, safe(state.seq ? state.seq.name : "transcript") + ".claude-review.txt");
+      var file = path.join(state.docsDir, safe(state.seq ? state.seq.name : "transcript") + fileSuffix);
       fs.writeFileSync(file, text);
-      status((ok ? "Copied to clipboard and saved " : "Saved ") + file, "ok");
-    } else status(ok ? "Copied to clipboard." : "Copy failed.", ok ? "ok" : "err");
+      status((ok ? "Copied the " + what + " and saved " : "Saved the " + what + " to ") + file, "ok");
+    } else status(ok ? "Copied the " + what + "." : "Copy failed.", ok ? "ok" : "err");
+  }
+  function copyReport() { copyText(editReport(), ".edit-report.md", "edit report"); }
+
+  /** The whole review for Claude: the method, what PodCutter found, and the time-stamped transcript. */
+  function copyForClaude() {
+    var show = state.cleanupOpts.showName || "a podcast", names = speakerNames();
+    var lines = [
+      "I'm editing an episode of " + show + " in Premiere: a conversational show" + (names.length ? " with " + names.join(", ") + " on mic" : "") + ".",
+      "Below are PodCutter's automatic findings and the time-stamped transcript (Whisper; times are about \u00b12\u20135 s, and names may be misheard).",
+      "Confirm, correct or reject each finding, and add anything it missed. Give me a short, prioritized list:",
+      "",
+      "1. Major cuts: production breakdowns that should never air, where the speakers talk about the show instead of the topic:",
+      "   time-outs and regrouping (\"we've lost the plot\", \"we need to land this plane\"), worry that the audience is lost,",
+      "   recording talk (\"are we still recording?\", \"we can cut that\", \"take pieces from this\"), restart cues,",
+      "   producer or agenda asks (\"[Name] wants me to talk about X\"), and internal business. Crosstalk, apologies and the same",
+      "   question asked over and over are clues. A breakdown is usually one stretch with a clear start and a clean restart: find both ends.",
+      "2. Smaller trims: dead handoffs (\"Any thoughts, Paul?\" \"Nope.\"), self-corrections at the start of a turn, trailing or",
+      "   overlapping questions. Don't flag long rambles.",
+      "3. Things to check: factual slips (book or series counts, dates, author names, who said what) that you're confident about,",
+      "   and misspoken names (say \"could be the transcript\"). Don't flag references that check out; say in one line that the rest sounded accurate.",
+      "",
+      "For every cut, give where to start, where to end, and why the join sounds natural: read the last line before the cut and",
+      "the first line after it. Start a breakdown cut at the first meta-talk line (or the end of the last on-topic thought before it),",
+      "and end it at the first clean, self-contained restart, usually the host re-asking a question with its full context.",
+      "Say whether a topic dropped in the cut is covered cleanly elsewhere (with times). Where a breakdown holds usable material, offer",
+      "the simplest option (one cut) and a surgical one (passages to keep, with times); flag internal or business leaks separately so",
+      "they get cut either way. Give the length removed. Note intentional structure (a cold open repeating a later exchange, intro and",
+      "outro) instead of cutting it.",
+      "",
+      "Report format, most important first:",
+      "## The main cut: about MM:SS to MM:SS (trigger quote, short timeline, the clean restart, simplest and surgical options)",
+      "## Smaller trims (MM:SS\u2013MM:SS: what it is, suggested trim)",
+      "## Possible on-air slips (worth a listen)",
+      "One line: everything else checked out.",
+      "Be direct, quote short snippets so I can find each spot by ear, and don't summarize the episode.",
+      "",
+      "PODCUTTER'S FINDINGS:", editReport(), "", "TRANSCRIPT:"];
+    T.assignSpeakers(state.tx.segments, speakerRunsByName()).forEach(function (sg) {
+      lines.push("[" + mmss(sg.startSec) + "] " + (sg.speaker ? sg.speaker + ": " : "") + sg.text);
+    });
+    copyText(lines.join("\n"), ".claude-review.txt", "Claude review");
   }
 
   // ------------------------------------------------------------ updates
@@ -2540,6 +2719,7 @@
     $("btnSugClear").disabled = b || !inPremiere;
     $("btnSugCsv").disabled = !sel || !hasNode;
     $("btnSugClaude").disabled = !state.tx.segments;
+    $("btnSugReport").disabled = !state.tx.segments;
   }
 
   var viz = new window.PDViz($("viz"), $("vizScroll"));
@@ -2600,6 +2780,7 @@
   $("btnSugClear").onclick = clearCuts;
   $("btnSugCsv").onclick = exportCsv;
   $("btnSugClaude").onclick = copyForClaude;
+  $("btnSugReport").onclick = copyReport;
   $("btnRecheck").onclick = function () {
     store("ffmpegCustom", $("ffmpegCustom").value.trim()); store("modelCustom", $("modelCustom").value.trim());
     checkTools().then(function () { status("Tools re-checked.", "ok"); });

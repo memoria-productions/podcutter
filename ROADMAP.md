@@ -100,6 +100,16 @@
 - **Dolly stays on the last person until it moves** (when there is no Who's in the shot reading), and a follow-cam shot that runs across a change of speaker is checked against whoever has the floor at each moment.
 - **Picture names checked by voice:** a long steady dolly stretch named after someone silent while another person talks is treated as on the talker. A follow-cam shot spanning several speakers is split per speaker, so monologue cutaways measure one person's turn. A brief aside over someone who carries on isn't crosstalk.
 
+## v0.22 (added)
+
+- **Edit review on the Cleanup tab**, from a hand review of episode 245:
+  - **Production breakdowns:** talk about the show instead of the topic (time-outs, "we've lost the plot", worrying the audience is lost, "are we still recording?", restart cues), found as one stretch from the first signal to the clean restart. Each lists its timeline, the restart line, length removed and where the dropped topic comes up again. **One cut** or **Keep good passages** (tick the passages; the two longest start ticked). Episode 245: 32:22–39:06, against 32:20–39:04 by hand, with the same two passages kept.
+  - **Producer and internal talk** ("Tanya very much wants me to talk about…", "I haven't been following what's going on with the guides"): cut even when passages around them are kept.
+  - **Dead handoffs** and **self-corrections** as smaller trims; a **cold open** that repeats a later exchange is noted, not cut.
+  - Suggestions are grouped into **Major cuts** and **Smaller trims**, and each shows **the join**: the last line before the cut and the first line after it.
+  - **Copy edit report** writes the list up in that order. **Copy for Claude review** now carries the whole review method, so Claude confirms the findings, adds what's missed, and checks for factual slips and misspoken names.
+  - Whisper fragments that break mid-sentence are read as one sentence.
+
 ## v0.21 (added)
 
 - **Knocks on the dolly count as movement:** a lean on the rail shifts the picture 2-3 px at full size in a fraction of a second, too small for the motion reading (it works at 160 px wide). The analyzer now also measures the whole picture's shift at 320 px, to a few hundredths of a pixel, and a knock reads as a slow move so the cut stays off the dolly there. Ep 245 had three between 14:17 and 14:27; on a static wide it never fired. Camera movement is analyzed again once (cache version 9).
@@ -157,6 +167,7 @@
 
 - **Jump-cut / silence removal** (AutoPod's "Jump Cut Editor"): ripple-delete silences on every track, using the existing mic analysis
 - **Apply accepted cleanup cuts**: optional ripple delete of the accepted transcript ranges on the copy, not only markers
+- **Paste Claude's review back**: read the ranges from Claude's edit list into the suggestions, so its additions and fact-check spots can be marked too
 - **Multicam-source output**: switch angles inside a Premiere multicam source sequence instead of enabling tracks
 - **Social reframe/export**: vertical and square versions (AutoPod's "Social Media Exporter")
 - **Speaker labels in the transcript**: per-mic transcription for exact attribution when bleed is heavy

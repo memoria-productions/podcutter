@@ -103,13 +103,24 @@ function cmdCleanup(args) {
   const segs = T.parse(fs.readFileSync(file, "utf8"), { fps: +args.fps || 30 });
   const opts = {};
   args.set.forEach((s) => { const [k, v] = s.split("="); opts[k] = value(v); });
+  // People on mic, for "Okay, so Kyle, …" restarts and "Any thoughts, Paul?" handoffs: --names Martin,Tanya,Paul
+  if (args.names) opts.names = String(args.names).split(",").map((n) => n.trim()).filter(Boolean);
   const r = T.analyze(segs, opts);
-  if (args.json) { console.log(JSON.stringify(r.suggestions, null, 2)); return; }
+  if (args.json) { console.log(JSON.stringify(r, (k, v) => (k === "segments" ? undefined : v), 2)); return; }
+  const F = T.formatTime;
   console.log(`${segs.length} transcript lines, ${r.suggestions.length} suggested cuts\n`);
   r.suggestions.forEach((s) => {
-    console.log(`${s.id}  ${T.formatTime(s.startSec)} - ${T.formatTime(s.endSec)}  [${s.type} ${Math.round(s.confidence * 100)}%]  ${s.reason}`);
-    console.log("      " + s.text.slice(0, 200));
+    console.log(`${s.id}  ${(s.tier || "").padEnd(5)}  ${F(s.startSec)} - ${F(s.endSec)}  [${s.type} ${Math.round(s.confidence * 100)}%]  ${s.reason}`);
+    if (s.type === "breakdown") {
+      s.timeline.forEach((t) => console.log(`      ${F(t.sec)}  ${t.kind.padEnd(9)} ${t.text}`));
+      console.log("      restart: " + (s.restart ? F(s.restart.sec) + "  " + s.restart.text : "none found"));
+      s.keeps.forEach((k) => console.log(`      keep${k.on ? "*" : " "} ${F(k.startSec)} - ${F(k.endSec)}  ${k.text.slice(0, 80)}`));
+      (s.leaks || []).forEach((l) => console.log(`      always cut ${F(l.startSec)}  ${l.reason}`));
+      s.elsewhere.forEach((e) => console.log(`      topic again: "${e.phrase}" at ${e.at.map(F).join(", ")}`));
+    } else console.log("      " + s.text.slice(0, 200));
+    console.log(`      join: "${s.joinBefore || "(start)"}" -> "${s.joinAfter || "(end)"}"`);
   });
+  r.notes.forEach((n) => console.log(`\nnote: cold open ${F(n.startSec)} - ${F(n.endSec)} repeats ${F(n.matchStartSec)} - ${F(n.matchEndSec)}`));
   if (args.csv) { fs.writeFileSync(args.csv, T.toCsv(r.suggestions)); console.log("\nWrote " + args.csv); }
 }
 

@@ -1,11 +1,14 @@
 /*
  * PodCutter — transcript analyzer.
  *
- * Finds sections the hosts meant to cut: spoken edit cues ("cut that",
- * "scratch that", "let me start over", "we'll fix it in post"), off-the-record
- * stretches, and false starts (a sentence begun, abandoned, and restarted with
- * the same words). Produces suggested remove-ranges with a confidence score
- * and the reason, for review in the panel or by Claude.
+ * An edit review of the conversation. Major cuts: production breakdowns (the
+ * hosts talking about the show instead of the topic, from the first signal to
+ * the clean restart, with passages worth keeping), producer and internal talk,
+ * spoken edit cues ("cut that", "we'll fix it in post"), off-the-record
+ * stretches, pre- and post-show chat. Smaller trims: restarts, false starts,
+ * dead handoffs, self-corrections, interruptions. Each suggestion carries a
+ * confidence, the reason and the join (the lines either side of the cut), for
+ * review in the panel or by Claude.
  *
  * Inputs: SRT, WebVTT, Premiere transcript .txt (timecoded blocks), or Whisper
  * JSON (segments, optional word timestamps). Pure JS, no dependencies.
@@ -172,7 +175,11 @@
     offRecordMaxSec: 600,
     backChainSec: 45,       // after a cut cue, "okay, we're back" must come within this of the last cut/back phrase
     backMaxSec: 240,        // and within this of the first cue
-    showName: ""            // the welcome address names the show ("welcome to Classical et cetera"): the show starts there
+    showName: "",           // the welcome address names the show ("welcome to Classical et cetera"): the show starts there
+    breakdownGapSec: 180,   // talk about the show this close together is one breakdown
+    restartWindowSec: 150,  // look this far past a breakdown's last meta line for the clean restart
+    keepMinSec: 20,         // an on-topic stretch inside a breakdown at least this long is worth keeping (surgical option)
+    names: []               // people on mic (first names are enough): a question addressed to one of them is a restart or a handoff
   };
 
   /**
@@ -224,16 +231,69 @@
 
     falseStarts(segs, o).forEach(function (s) { out.push(s); });
     showEdges(segs, o).forEach(function (s) { out.push(s); });
+    deadHandoffs(segs, o).forEach(function (s) { out.push(s); });
+    selfCorrections(segs, o).forEach(function (s) { out.push(s); });
 
-    var merged = mergeSuggestions(out.filter(function (s) { return s.confidence >= o.minConfidence; }));
+    var small = mergeSuggestions(out.filter(function (s) { return s.confidence >= o.minConfidence; }));
+    // Breakdowns stand apart: what they swallow is listed inside them; leaks inside them stay cut even when
+    // the editor keeps the good passages.
+    var big = breakdowns(segs, o).filter(function (b) { return b.confidence >= o.minConfidence; });
+    var leaks = leakLines(segs, o);
+    big.forEach(function (b) {
+      b.leaks = leaks.filter(function (l) { return l.startSec >= b.startSec - 1 && l.endSec <= b.endSec + 1; });
+      b.keeps = b.keeps.map(function (k) {
+        // A leak splits a keep: never keep a leak line.
+        var pieces = [[k.startSec, k.endSec]];
+        b.leaks.forEach(function (l) {
+          pieces = pieces.reduce(function (acc, pc) {
+            if (l.endSec <= pc[0] || l.startSec >= pc[1]) acc.push(pc);
+            else {
+              if (l.startSec - pc[0] >= o.keepMinSec) acc.push([pc[0], l.startSec]);
+              if (pc[1] - l.endSec >= o.keepMinSec) acc.push([l.endSec, pc[1]]);
+            }
+            return acc;
+          }, []);
+        });
+        return pieces.map(function (pc) { return { startSec: round2(pc[0]), endSec: round2(pc[1]), text: clip(sentenceText(segs, pc[0], pc[1]), 120) }; });
+      }).reduce(function (a, x) { return a.concat(x); }, []);
+      var longest = b.keeps.slice().sort(function (x, y) { return (y.endSec - y.startSec) - (x.endSec - x.startSec); }).slice(0, 2);
+      b.keeps.forEach(function (k, i) { k.id = b.type + "-keep" + i; k.on = longest.indexOf(k) >= 0; });
+    });
+    var inBig = function (s) { return big.some(function (b) { return s.startSec >= b.startSec - 1 && s.endSec <= b.endSec + 1; }); };
+    var merged = small.filter(function (s) { return !inBig(s); })
+      .concat(leaks.filter(function (l) { return !inBig(l) && l.confidence >= o.minConfidence; }))
+      .concat(big)
+      .sort(function (a, b) { return a.startSec - b.startSec; });
+    var all = sentenceStream(segs, 0, 0);
     merged.forEach(function (s, idx) {
       s.id = "cut" + (idx + 1);
       s.startSec = Math.max(0, round2(s.startSec - o.padSec));
       s.endSec = round2(s.endSec + o.padSec);
       s.confidence = round2(Math.max(0, Math.min(1, s.confidence)));
       s.text = textBetween(segs, s.startSec, s.endSec);
+      s.tier = tierOf(s);
+      // Test the join: the last line before the cut and the first line after it should read as one conversation.
+      var before = null, after = null;
+      all.forEach(function (st) {
+        if (st.endSec <= s.startSec + 0.3) before = st;
+        else if (!after && st.startSec >= s.endSec - 0.3) after = st;
+      });
+      s.joinBefore = before ? clip(before.text, 110, true) : null;
+      s.joinAfter = after ? clip(after.text, 110) : null;
     });
-    return { suggestions: merged, segments: segs };
+    return { suggestions: merged, segments: segs, notes: coldOpen(segs, o) };
+  }
+
+  /** major: never air it (breakdowns, leaks, pre/post-show, long asked-for cuts); trim: tidy-ups. */
+  function tierOf(s) {
+    if (/^(breakdown|leak|pre-show|post-show|off-record)$/.test(s.type)) return "major";
+    if (s.type === "edit-cue" && s.endSec - s.startSec > 20) return "major";
+    return "trim";
+  }
+  function clip(t, n, tail) {
+    t = String(t || "").trim();
+    if (t.length <= n) return t;
+    return tail ? "\u2026" + t.slice(t.length - n).replace(/^\S*\s/, "") : t.slice(0, n).replace(/\s\S*$/, "") + "\u2026";
   }
 
   function cueTimeInSegment(sg, charIndex, len) {
@@ -431,6 +491,278 @@
     return res;
   }
 
+  // ------------------------------------------- production breakdowns
+
+  // Talk about the show instead of the topic. A breakdown is one stretch with a clear start (the first of these)
+  // and a clean restart (the host asking a question again with its full context).
+  var META = [
+    { kind: "regroup", w: 0.85, re: /\b(take|have|call) a time ?out\b|\blost the plot\b|\bland (this|the|that) plane\b|\b(gotta|got to|got a|have to|need to) land (somewhere|on something|this|that)\b|\bdon'?t (even )?know where we'?re (at|going)\b|\b(get|getting|bring|bringing) (us |it |this |things )?back on track\b|\blet'?s (regroup|reset|refocus)\b|\bwe'?re (all over the place|going (around )?in circles|rambling)\b|\bwhat are we even (talking about|doing)\b|\bthis (isn'?t|is not) (working|going anywhere)\b/ },
+    { kind: "regroup", w: 0.6, re: /\b(synthesize|pull together|tie together) (all )?(the things|what|everything) we'?ve (talked about|said)\b|\bsuch a tangle\b/ },
+    { kind: "audience", w: 0.7, re: /\b(average|normal|regular|typical) (person|listener|viewer|parent|homeschooler|mom|reader)s?\b[^.?!]{0,40}\b(no idea|no clue|confused|lost|won'?t (know|understand|follow)|doesn'?t (know|understand|follow)|don'?t (know|understand|follow))\b|\b(people|listeners|viewers|our audience|the audience)\b[^.?!]{0,25}\b(going to|gonna|will|would) be (so |really |very )?(confused|lost)\b|\bno (idea|clue) what we'?re (talking about|saying)\b/ },
+    { kind: "audience", w: 0.5, re: /\b(the )?average (person|listener|viewer|bear|joe|reader|homeschooler)\b|\bpeople are (going to|gonna) (come away|walk away)\b/ },
+    { kind: "recording", w: 0.75, re: /\bare we (still )?(recording|rolling)( again)?\b|\bis (this|it|everything) (still )?(recording|rolling)\b|\bstill rolling\b|\b(we|you|they|he|she|[a-z]+) can (just )?(cut|edit) (that|this|it)( out)?\b|\buse (whatever|what) ?(is|'?s) (useful|usable|good|helpful)\b|\b(take|pull|use|grab) (pieces|bits|parts|clips|snippets) (from|of|out of)\b/ },
+    { kind: "restart", w: 0.6, re: /\b(let me|lemme|let'?s) (start|try|do) (that|this|it)? ?(over|again)\b|\bstart over\b|\bfrom the top\b|\blet me (re ?ask|rephrase|reframe) (that|the question|this)\b/ },
+    { kind: "restart", w: 0.5, re: /\b(we'?ll|let'?s|we can|we'?re going to) (just )*(continue|keep going|carry on|pick (it )?(back )?up)\b/ }
+  ];
+  // Business that shouldn't air even inside a passage worth keeping: producer asks and internal projects.
+  var LEAK = [
+    { kind: "agenda", w: 0.8, raw: /\b[A-Z][a-z]+ (really |very much |definitely |specifically )?wants (me|us) to (talk|mention|plug|bring up|say|cover)\b/ },
+    { kind: "agenda", w: 0.75, re: /\b(i'?ve got to|i have to|i need to|i'?m supposed to|we'?re supposed to|i gotta|i got to)\b[^.?!]{0,60}\bbefore (we|the (episode|show)) (end|ends|wrap|close|finish)/ },
+    { kind: "internal", w: 0.75, re: /\b(that'?s|it'?s) not (something|anything) (that )?we need to (discuss|talk about|get into)\b|\b(i haven'?t|i have not|i'?ve not) been following (what'?s (been )?going on|what is going on|what has been going on|the progress)\b|\b(we'?ll|let'?s|we can) (talk|discuss|deal with) (about )?(that|this|it) (later|offline|afterwards|after the (show|episode)|off (air|mic))\b/ }
+  ];
+  var APOLOGY = /^(sorry|i'?m sorry|my bad|go ahead|no,? you go|you go( ahead)?|no no|wait)\b/;
+  var RESTART_OPEN = /^(okay|ok|alright|all right|so|well|now)\b/;
+
+  /**
+   * Sentences with the segment each came from. Whisper breaks segments mid-sentence ("That's not something we
+   * need to" | "discuss."), so a fragment without closing punctuation runs on into the next segment.
+   */
+  function sentenceList(segs) {
+    var list = [];
+    segs.forEach(function (sg) {
+      sentences(sg).forEach(function (st) {
+        var p = list[list.length - 1];
+        if (p && p.seg !== sg && !/[.!?]["”']?\s*$/.test(p.st.text) && st.startSec - p.st.endSec < 1.5 && p.st.n + st.n <= 80) {
+          var text = p.st.text + " " + st.text;
+          p.st = { text: text, norm: normalize(text), n: p.st.n + st.n, startSec: p.st.startSec, endSec: st.endSec };
+        } else list.push({ st: st, seg: sg });
+      });
+    });
+    return list;
+  }
+  function metaOf(item, cues) {
+    for (var c = 0; c < cues.length; c++) {
+      var cue = cues[c], m = cue.raw ? cue.raw.exec(item.st.text) : cue.re.exec(item.st.norm);
+      if (m) return { kind: cue.kind, w: cue.w, phrase: m[0] };
+    }
+    return null;
+  }
+  function isCrosstalk(item) { return item.st.n <= 3 || APOLOGY.test(item.st.norm); }
+  function namesRe(o) {
+    var n = (o.names || []).map(function (x) { return String(x).split(/\s+/)[0].replace(/[^A-Za-z'\-]/g, ""); }).filter(function (x) { return x.length > 1; });
+    return n.length ? new RegExp("\\b(" + n.join("|") + ")\\b", "i") : null;
+  }
+
+  function breakdowns(segs, o) {
+    var list = sentenceList(segs), hits = [];
+    list.forEach(function (it, i) {
+      var m = metaOf(it, META) || metaOf(it, LEAK);
+      if (m) hits.push({ i: i, m: m });
+    });
+    // Hits close together form one stretch.
+    var clusters = [], cur = null;
+    hits.forEach(function (h) {
+      if (cur && list[h.i].st.startSec - list[cur[cur.length - 1].i].st.endSec <= o.breakdownGapSec) cur.push(h);
+      else { cur = [h]; clusters.push(cur); }
+    });
+    var res = [], nameRe = namesRe(o);
+    clusters.forEach(function (cl) {
+      var first = cl[0].i, last = cl[cl.length - 1].i;
+      var kinds = {}; cl.forEach(function (h) { kinds[h.m.kind] = 1; });
+      var cross = 0;
+      for (var k = first; k <= Math.min(list.length - 1, last + 6); k++) if (isCrosstalk(list[k])) cross++;
+      var score = cl.reduce(function (a, h) { return a + h.m.w; }, 0) + 0.15 * (Object.keys(kinds).length - 1) + Math.min(0.6, 0.05 * cross);
+      // One strong "we've lost the plot" with a burst of crosstalk counts; otherwise it takes two signals.
+      var ok = (cl.length >= 2 && score >= 1.4) || (kinds.regroup && cross >= 4);
+      if (!ok) return;
+      // Start: the first meta line, pulled back over the crosstalk just before it.
+      var s = first;
+      while (s > 0 && isCrosstalk(list[s - 1]) && list[first].st.startSec - list[s - 1].st.startSec <= 10) s--;
+      // End: the first clean, self-contained restart after the last meta line.
+      var lastEnd = list[last].st.endSec, restart = null;
+      for (var r = last + 1; r < list.length && list[r].st.startSec - lastEnd <= o.restartWindowSec; r++) {
+        var it = list[r];
+        if (metaOf(it, META) || metaOf(it, LEAK) || isCrosstalk(it)) continue;
+        var q = /\?\s*$/.test(it.st.text), addressed = nameRe && nameRe.test(it.st.text);
+        var nextQ = list[r + 1] && /\?\s*$/.test(list[r + 1].st.text) && list[r + 1].st.startSec - it.st.endSec < 2;
+        if ((q && it.st.n >= 8) || (RESTART_OPEN.test(it.st.norm) && it.st.n >= 10 && (q || nextQ || addressed))) { restart = it; break; }
+      }
+      var endSec = restart ? restart.st.startSec : lastEnd, e = last;
+      if (!restart) while (e + 1 < list.length && isCrosstalk(list[e + 1]) && list[e + 1].st.startSec - list[e].st.endSec < 3) { e++; endSec = list[e].st.endSec; }
+      var startSec = list[s].st.startSec;
+      // Passages inside worth keeping: long on-topic runs with no meta talk or crosstalk.
+      var keeps = [], run = null, endIdx = restart ? list.indexOf(restart) - 1 : e;
+      for (var j = s; j <= endIdx; j++) {
+        var bad = metaOf(list[j], META) || metaOf(list[j], LEAK) || APOLOGY.test(list[j].st.norm);
+        if (!bad && run && list[j].st.n <= 3) continue; // "Right." "Yeah." inside a passage: keep going
+        bad = bad || isCrosstalk(list[j]);
+        if (!bad && run && list[j].st.startSec - run.endSec < 2.5) run.endSec = list[j].st.endSec;
+        else if (!bad) run = { startSec: list[j].st.startSec, endSec: list[j].st.endSec };
+        else run = null;
+        if (run && run.endSec - run.startSec >= o.keepMinSec && keeps.indexOf(run) < 0) keeps.push(run);
+      }
+      res.push({
+        startSec: startSec, endSec: endSec, type: "breakdown", review: "both",
+        confidence: Math.min(0.95, 0.5 + 0.08 * cl.length + 0.12 * (Object.keys(kinds).length - 1) + Math.min(0.15, 0.02 * cross) + (restart ? 0.05 : 0)),
+        trigger: cl[0].m.phrase, speaker: list[first].seg.speaker || null,
+        reason: "Production breakdown: “" + clip(list[first].st.text, 70) + "”",
+        timeline: cl.map(function (h) { return { sec: round2(list[h.i].st.startSec), kind: h.m.kind, text: clip(list[h.i].st.text, 90) }; }),
+        crosstalk: cross,
+        restart: restart ? { sec: round2(restart.st.startSec), text: clip(restart.st.text, 120) } : null,
+        keeps: keeps,
+        elsewhere: topicElsewhere(list, startSec, endSec)
+      });
+    });
+    // Two breakdowns that touch are one.
+    return res.reduce(function (acc, b) {
+      var p = acc[acc.length - 1];
+      if (p && b.startSec <= p.endSec + 5) {
+        p.endSec = Math.max(p.endSec, b.endSec); p.timeline = p.timeline.concat(b.timeline); p.keeps = p.keeps.concat(b.keeps);
+        p.restart = b.restart || p.restart; p.confidence = Math.max(p.confidence, b.confidence); p.crosstalk += b.crosstalk;
+      } else acc.push(b);
+      return acc;
+    }, []);
+  }
+
+  /** Producer asks and internal business, one line each. */
+  function leakLines(segs, o) {
+    return sentenceList(segs).map(function (it) {
+      var m = metaOf(it, LEAK);
+      return m ? { startSec: it.st.startSec, endSec: it.st.endSec, type: "leak", confidence: m.w, review: "both", trigger: m.phrase,
+        speaker: it.seg.speaker || null, reason: (m.kind === "agenda" ? "Producer / agenda talk" : "Internal business") + ": “" + clip(it.st.text, 80) + "”" } : null;
+    }).filter(Boolean);
+  }
+
+  // Words that say nothing about the topic, for finding where a dropped subject comes up again.
+  var STOP = {};
+  ("the a an and or but so of to in on at for with from by about as is are was were be been being it its it's this that these those there " +
+   "here what which who whom whose when where why how i you he she we they me him her us them my your his our their mine yours " +
+   "do does did doing have has had having not no yes yeah okay ok um uh like just really very much more most some any all " +
+   "can could would should will shall may might must going gonna want wanna know think thing things kind sort lot get got " +
+   "one two also then than too well right mean say said see go because if out up down over into even still i'm it's that's " +
+   "talk talking talked saying people actually maybe something everything anything little point question questions " +
+   "don't you're we're they're there's what's").split(" ").forEach(function (w) { STOP[w] = 1; });
+
+  /** Where the subject of a cut comes up again outside it: the cut's repeated two-word phrases, found elsewhere. */
+  function topicElsewhere(list, a, b) {
+    var counts = {};
+    list.forEach(function (it) {
+      if (it.st.startSec < a || it.st.endSec > b) return;
+      var w = words(it.st.text).filter(function (x) { return x.length > 2 && !STOP[x] && x.indexOf("'") < 0; }), seen = {};
+      for (var k = 0; k < w.length; k++) {
+        var keys = [w[k].length >= 5 ? w[k] : null, k + 1 < w.length ? w[k] + " " + w[k + 1] : null];
+        keys.forEach(function (key) { if (key && !seen[key]) { seen[key] = 1; counts[key] = (counts[key] || 0) + 1; } });
+      }
+    });
+    var outside = list.filter(function (it) { return it.st.endSec <= a - 20 || it.st.startSec >= b + 20; }).map(function (it) {
+      return { sec: it.st.startSec, t: " " + words(it.st.text).filter(function (x) { return x.length > 2 && !STOP[x] && x.indexOf("'") < 0; }).join(" ") + " " };
+    });
+    var found = [];
+    Object.keys(counts).forEach(function (key) {
+      if (counts[key] < 2) return;
+      var at = [];
+      outside.forEach(function (x) { if (x.t.indexOf(" " + key + " ") >= 0 && (!at.length || x.sec - at[at.length - 1] > 60)) at.push(round2(x.sec)); });
+      // A subject, not a stock phrase: it comes up again, but not all through the show.
+      if (!at.length || at.length > 8) return;
+      var later = at.filter(function (t) { return t > b; });
+      found.push({ phrase: key, at: later.concat(at.filter(function (t) { return t <= b; })).slice(0, 3), n: counts[key], later: later.length });
+    });
+    // Covered again after the cut beats mentioned before it; then how much the cut dwelt on it.
+    found.sort(function (x, y) { return y.n * Math.min(3, y.later) - x.n * Math.min(3, x.later) || y.n - x.n || x.at.length - y.at.length; });
+    var out = [];
+    found.forEach(function (f) { if (out.length < 2 && !out.some(function (o2) { return o2.phrase.indexOf(f.phrase) >= 0 || f.phrase.indexOf(o2.phrase) >= 0; })) out.push({ phrase: f.phrase, at: f.at }); });
+    return out;
+  }
+
+  // ------------------------------------------------------ small trims
+
+  var HANDOFF = /\b((any|no|final|last|other) (final |last |other |closing )?(thoughts|ponderings|comments|questions|reactions|response|takeaways?)|anything (to add|else|from you)|what do you think|want to (add|jump in|respond)|do you have (anything|any)|your (thoughts|take))\b/;
+  var DECLINE = /^(nope|no|nah|not really|i'?m good|i'?m fine|i think i'?m good|nothing|pass|no,? i'?m (good|fine)|i don'?t think so|not from me|nothing (from me|to add|else)|no,? not really|i'?m all set)\b/;
+  /** The host invites someone in and they decline: "Any ponderings, Paul?" "Nope." */
+  function deadHandoffs(segs, o) {
+    var list = sentenceList(segs), res = [], nameRe = namesRe(o);
+    // All in one short line, often unpunctuated: "no final ponderings Paul no". Read on the transcriber's own
+    // lines, before fragments are joined into sentences.
+    segs.forEach(function (sg) {
+      sentences(sg).forEach(function (st) {
+        var hm = HANDOFF.exec(st.norm);
+        if (!hm || st.n > 10) return;
+        var rest = st.norm.slice(hm.index + hm[0].length).split(" ").filter(function (x) { return x && !(nameRe && nameRe.test(x)); });
+        if (rest.length && rest.length <= 4 && rest.some(function (x) { return /^(no|nope|nah|nothing)$/.test(x); }))
+          res.push({ startSec: st.startSec, endSec: st.endSec, type: "dead-handoff", confidence: 0.55, review: "both", trigger: st.text,
+            speaker: sg.speaker || null, reason: "Dead handoff: “" + clip(st.text, 60) + "”" });
+      });
+    });
+    for (var i = 0; i + 1 < list.length; i++) {
+      var q = list[i], a = list[i + 1];
+      if (!/\?\s*$/.test(q.st.text) || !(HANDOFF.test(q.st.norm) || (nameRe && nameRe.test(q.st.text) && q.st.n <= 8))) continue;
+      if (a.st.n > 5 || !DECLINE.test(a.st.norm) || a.st.startSec - q.st.endSec > 3) continue;
+      if (q.seg.speaker && a.seg.speaker && q.seg.speaker === a.seg.speaker && q.seg !== a.seg) continue;
+      res.push({ startSec: q.st.startSec, endSec: a.st.endSec, type: "dead-handoff", confidence: 0.6, review: "both", trigger: q.st.text,
+        speaker: q.seg.speaker || null, reason: "Dead handoff: “" + clip(q.st.text, 50) + "” → “" + a.st.text + "”" });
+    }
+    return res;
+  }
+
+  /** "I haven't made any… I mean I haven't finished": trim the false opening up to the restart. */
+  function selfCorrections(segs, o) {
+    var res = [], list = sentenceList(segs);
+    list.forEach(function (it, idx) {
+      // Across a sentence break: "I haven't made any prior. I mean, I haven't finished…"
+      var prev = list[idx - 1];
+      if (prev && prev.st.n <= 8 && it.st.startSec - prev.st.endSec < 1 && /^(i mean|or rather|sorry)\b/.test(it.st.norm)) {
+        var pw = words(prev.st.text), cw = it.st.norm.replace(/^(i mean|or rather|sorry)\s*/, "").split(" ");
+        if (pw.length >= 2 && cw[0] === pw[0] && cw[1] === pw[1]) {
+          var tw0 = timedWords(it.st), skip = it.st.norm.split(" ").length - cw.length;
+          res.push({ startSec: prev.st.startSec, endSec: tw0[Math.min(tw0.length - 1, skip)].sec - 0.15, type: "self-correction", confidence: 0.55, review: "end",
+            trigger: prev.st.text, speaker: prev.seg.speaker || null,
+            reason: "Self-correction: “" + clip(prev.st.text + " " + it.st.text, 70) + "”" });
+          return;
+        }
+      }
+      var tw = timedWords(it.st), w = tw.map(function (x) { return x.norm; });
+      for (var k = 2; k <= Math.min(8, w.length - 3); k++) {
+        if (!((w[k] === "i" && w[k + 1] === "mean") || (w[k] === "or" && w[k + 1] === "rather"))) continue;
+        if (w[k + 2] !== w[0] || w[k + 3] !== w[1]) continue; // the opening two words again
+        var per = (it.st.endSec - it.st.startSec) / Math.max(1, tw.length);
+        res.push({ startSec: it.st.startSec, endSec: tw[k + 2].sec - per / 2,
+          type: "self-correction", confidence: 0.5, review: "end", trigger: tw.slice(0, k + 2).map(function (x) { return x.raw; }).join(" "),
+          speaker: it.seg.speaker || null, reason: "Self-correction: “" + tw.slice(0, k + 3).map(function (x) { return x.raw; }).join(" ") + "…”" });
+        break;
+      }
+    });
+    return res;
+  }
+
+  /**
+   * Intentional structure: a cold open that repeats a later exchange word for word. Not a cut: a note, so the
+   * teaser still works after the edit. -> [{ type: "cold-open", startSec, endSec, matchStartSec, matchEndSec, text }]
+   */
+  function coldOpen(segs, o) {
+    var list = sentenceList(segs);
+    if (!list.length) return [];
+    var t0 = list[0].st.startSec, opening = [], rest = [];
+    list.forEach(function (it) {
+      timedWords(it.st).forEach(function (w) {
+        if (!w.norm || FILLER[w.norm]) return;
+        (w.sec - t0 <= 45 ? opening : rest).push(w);
+      });
+    });
+    var N = 6, grams = {};
+    for (var i = 0; i + N <= opening.length; i++) {
+      var g = opening.slice(i, i + N).map(function (w) { return w.norm; }).join(" ");
+      if (grams[g] === undefined) grams[g] = i;
+    }
+    // The longest stretch of the opening said again later.
+    var best = null;
+    for (var j = 0; j + N <= rest.length; j++) {
+      if (rest[j].sec - t0 < 90) continue;
+      var key = rest.slice(j, j + N).map(function (w) { return w.norm; }).join(" ");
+      if (grams[key] === undefined) continue;
+      var a = grams[key], b = j, len = N;
+      while (a + len < opening.length && b + len < rest.length && opening[a + len].norm === rest[b + len].norm) len++;
+      var a0 = a, b0 = b;
+      while (a0 > 0 && b0 > 0 && opening[a0 - 1].norm === rest[b0 - 1].norm) { a0--; b0--; }
+      var total = a + len - a0;
+      if (!best || total > best.total) best = { total: total, a0: a0, a1: a + len - 1, b0: b0, b1: b + len - 1 };
+      j = b + len - 1;
+    }
+    if (!best) return [];
+    return [{ type: "cold-open", startSec: round2(opening[best.a0].sec), endSec: round2(opening[best.a1].sec),
+      matchStartSec: round2(rest[best.b0].sec), matchEndSec: round2(rest[best.b1].sec),
+      text: clip(opening.slice(best.a0, best.a1 + 1).map(function (w) { return w.raw; }).join(" "), 140) }];
+  }
+
   // ---------------------------------------------------- introductions
 
   // Words that can follow a first name without being a surname ("Paul, Tanya and Martin", "Jessica Abood and…").
@@ -554,7 +886,8 @@
   var LABELS = {
     "edit-cue": "Asked to cut", restart: "Restart / retake", "off-record": "Off the record",
     bleep: "Bleep requested", interruption: "Interruption (phone, alarm\u2026)", technical: "Technical chatter", "false-start": "False start",
-    "pre-show": "Pre-show chatter", "post-show": "Post-show chatter"
+    "pre-show": "Pre-show chatter", "post-show": "Post-show chatter", breakdown: "Production breakdown", leak: "Producer / internal talk",
+    "dead-handoff": "Dead handoff", "self-correction": "Self-correction"
   };
   function describe(type, phrase) { return (LABELS[type] || type) + ": “" + phrase + "”"; }
 
@@ -575,6 +908,9 @@
     return out;
   }
 
+  function sentenceText(segs, a, b) {
+    return sentenceList(segs).filter(function (it) { return it.st.startSec >= a - 0.05 && it.st.endSec <= b + 0.05; }).map(function (it) { return it.st.text; }).join(" ");
+  }
   function textBetween(segs, a, b) {
     return segs.filter(function (s) { return s.endSec > a && s.startSec < b; })
       .map(function (s) { return (s.speaker && !/^unknown$/i.test(s.speaker) ? s.speaker + ": " : "") + s.text; }).join(" ").slice(0, 600);

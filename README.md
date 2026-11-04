@@ -3,7 +3,7 @@
 An open, offline, AutoPod-style multicam editor for Adobe Premiere Pro, plus transcript-based cleanup.
 
 - **Multicam:** reads each speaker's mic waveform and switches between camera tracks to follow the conversation. It handles bleed, crosstalk, interjections and reaction shots, cutaways during long monologues, angle rotation, pacing presets, per-speaker priority, and manual locks. It previews live in the panel, then builds the cut on a duplicate sequence.
-- **Cleanup:** transcribes offline with a bundled whisper.cpp, or loads SRT/VTT/TXT, then flags "cut that" / "start over" / off-the-record / false-start sections as red range markers.
+- **Cleanup:** transcribes offline with a bundled whisper.cpp, or loads SRT/VTT/TXT, then flags production breakdowns (talk about the show instead of the topic, from the first signal to the clean restart), producer or internal talk, "cut that" / "start over" / off-the-record / false starts, dead handoffs and self-corrections, as red range markers and an edit report.
 - **Self-contained:** the Windows build ships ffmpeg, whisper.cpp, and the models. There's no internet, no Python, and no local AI service.
 
 Users: see **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**. Plans: see [ROADMAP.md](ROADMAP.md).
@@ -18,7 +18,7 @@ engine/director.js       Cutting engine (pure JS, no deps), the heart of it
 engine/analyzer.js       ffmpeg -> per-track loudness curves (dB/25 ms), disk-cached
 engine/motion.js         ffmpeg -> camera-motion curves (pan/tilt/dolly/zoom, subject motion rejected)
 engine/transcriber.js    Timeline mix -> whisper.cpp (word timestamps + Silero VAD)
-engine/transcript.js     Transcript parsing + cut-cue / restart / off-record detection
+engine/transcript.js     Transcript parsing + breakdowns, leaks, cut cues, restarts, small trims
 cli/podcutter.js       Offline tuning: plan / compare presets / cleanup
 tests/                   node:test suites (engine, analyzer+ffmpeg, transcript)
 install/                 Windows installer (per-user, sets PlayerDebugMode)

@@ -163,7 +163,7 @@
 
     <div class="card">
       <h2>Transcript</h2>
-      <p class="muted">Finds spots where someone said to cut, restarted a sentence, or went off the record.</p>
+      <p class="muted">Finds what should never air (production breakdowns, producer or internal talk, someone asking to cut) and smaller trims (restarts, dead handoffs, stumbles), with where each cut should start and end.</p>
       <div class="actions two">
         <button id="btnTranscribe" class="btn primary">Transcribe timeline</button>
         <label class="btn">Load SRT / VTT / TXT<input type="file" id="txFile" accept=".srt,.vtt,.txt,.json" hidden /></label>
@@ -204,8 +204,11 @@
       <button id="btnSugClear" class="btn">Clear cleanup markers</button>
     </div>
     <div class="actions two">
+      <button id="btnSugReport" class="btn ghost small" disabled title="The edit list as text: major cuts with where to start and end, smaller trims, notes">Copy edit report</button>
+      <button id="btnSugClaude" class="btn ghost small" disabled title="The method, PodCutter's findings and the transcript, ready to paste into Claude. Claude also checks for factual slips and misspoken names.">Copy for Claude review</button>
+    </div>
+    <div class="actions two">
       <button id="btnSugCsv" class="btn ghost small" disabled>Export cut list (CSV)</button>
-      <button id="btnSugClaude" class="btn ghost small" disabled>Copy for Claude review</button>
     </div>
   </section>
 
