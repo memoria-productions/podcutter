@@ -95,8 +95,9 @@
     return function () {
       if (state.busy) { status("PodCutter is still busy with the last job — wait for it to finish (see the status line and the Log), then try again.", "err"); return; }
       var args = arguments;
-      state.busy = true; setButtons();
-      Promise.resolve().then(function () { return fn.apply(null, args); })
+      state.busy = true;
+      // Through the promise, so an error here can't leave every button stuck on busy.
+      Promise.resolve().then(function () { setButtons(); return fn.apply(null, args); })
         .catch(function (e) { status(e.message || String(e), "err", 0); })
         .then(function () { state.busy = false; setButtons(); });
     };
@@ -301,7 +302,7 @@
   function vtrackIn(info, idx) { return info.videoTracks.filter(function (v) { return v.index === idx; })[0] || null; }
   function vtrack(idx) { return state.seq ? vtrackIn(state.seq, idx) : null; }
   function nestAngleTracks() { return state.seq ? state.seq.videoTracks.filter(function (v) { return v.virtual; }) : []; }
-  function usesNest() { return state.config.cameras.some(function (c) { return c.enabled !== false && c.videoTrack >= NEST_BASE; }); }
+  function usesNest() { return !!state.config && state.config.cameras.some(function (c) { return c.enabled !== false && c.videoTrack >= NEST_BASE; }); }
 
   /** Point the cameras at the nest's angles, in track order (bottom camera = angle 1), keeping their settings. */
   function useNestAngles() {
@@ -1573,7 +1574,7 @@
   /** Under the label switch: the shortcuts a multicam build will press, or which colours still need one. */
   function renderLabelKey() {
     var note = $("labelKeyNote");
-    if (!$("rose2").checked || !hasNode) { note.textContent = ""; return; }
+    if (!$("rose2").checked || !hasNode || !state.config) { note.textContent = ""; return; }
     var colors = [];
     state.config.cameras.forEach(function (c) { var n = camLabel(c); if (c.enabled !== false && n >= 0 && colors.indexOf(n) < 0) colors.push(n); });
     if (!colors.length) { note.textContent = "No camera has a label colour (set one under Cameras)."; return; }

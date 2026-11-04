@@ -301,6 +301,7 @@ Updates can come from two places:
 | Problem | Fix |
 |---|---|
 | The panel isn't under Window → Extensions | Run the installer again with Premiere closed. |
+| Scan does nothing and every button stays greyed out (0.21.0–0.21.3) | Update to 0.21.4 or later. Those versions stopped partway through opening the panel. |
 | "ffmpeg was not found" | Check Settings. The bundled copy should appear there. If antivirus quarantined it, restore it or set a custom path. |
 | Very few cuts; the camera barely switches | Check each speaker's channel menu: speakers sharing one multichannel file must each use their own channel, not **All ch**. |
 | The camera follows the wrong person | Open ⚙ on that speaker and look at the level bar. If the white threshold line sits inside the bleed, set the threshold manually above it, or lower **Bleed rejection**. |

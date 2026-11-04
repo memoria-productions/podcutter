@@ -1,6 +1,6 @@
 {
   "name": "podcutter",
-  "version": "0.21.3",
+  "version": "0.21.4",
   "description": "AutoPod-style multicam podcast editor and transcript cleanup for Adobe Premiere Pro (offline, self-contained).",
   "license": "MIT",
   "private": true,
