@@ -139,7 +139,9 @@ These are listener reactions like "Yeah", laughs, and quick remarks.
 This group appears once **Check for movement** is on for a camera. PodCutter measures how much the *camera* moves (pan, tilt, dolly, push-in, shake) separately from how much the *people* move. Someone gesturing or leaning in front of a steady camera doesn't count as camera movement. The preview shows a movement lane for each moving camera: **green** = steady, **amber** = slow move, **red** = big move.
 
 - **Steady below / Big move above:** the two thresholds, in percent of frame width per second. Between them is a *slow move*, such as a gentle push-in or a drift.
-- **Settle time:** how long the camera must be steady before PodCutter cuts to it, so you never land on the tail end of a move.
+- **Settle time:** how long the camera must be steady before PodCutter cuts to it, so you never land on the tail end of a move. It only applies next to a move.
+- **Parked after** (2 s): an operated camera that has been still on one person this long is *parked* on them, a safe zone. Nothing needs to settle there, so PodCutter can cut to it at once.
+- **Wide before parked cam** (3 s; 4.5 s in Wide + dolly handoffs): a wide that hands back to a dolly already parked on whoever is talking only stays up this long, not the full **Minimum wide**. For example, Tanya chips in over Paul and the dolly never leaves Paul: the wide covers her line, then it's back on Paul without waiting out 9 s. Wides before a dolly that has to move or settle still get the full Minimum wide.
 - **Wait to settle:** if a cut would land mid-move, PodCutter holds the previous shot up to this long. Longer moves go to the wide until the camera settles.
 - **Slow moves on air:** keep gentle push-ins on screen once you're on that camera, or cut away from any movement. It's off by default, so any visible reframing or drift cuts to the wide.
 - **Leave move early by:** how early to cut away before a big move starts.

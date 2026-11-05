@@ -195,3 +195,35 @@ test("a content cut is covered by the dolly even when the operator moves it a fe
   assert.equal(cover.reason, "jump-cover");
   assert.ok(cover.endSec <= 26 && cover.endSec >= 24, "and leaves the dolly just before it moves (" + cover.endSec + ")");
 });
+
+// Safe zones: an operated camera parked (still) on someone needs no settling; the settle rules only apply next to a move.
+const followCams = [{ id: "W", videoTrack: 0, shows: ["A", "B"] }, { id: "F", videoTrack: 1, shows: [], follows: true, moving: true }];
+
+test("back to a speaker the dolly stayed parked on: straight to the solo; just arrived on them: the wide first", () => {
+  const mk = (moves, framing) => Object.assign(makeCurves([["A", 1, 30], ["B", 30.5, 55], ["A", 55.5, 80]], { durationSec: 82 }),
+    { cameraMotion: { F: motion(82, moves) }, framing: { F: framing } });
+  const cfg = { speakers, cameras: followCams, preset: "handoff", style: { openOnWideSec: 0 } };
+  const parked = D.plan(mk([], [{ startSec: 0, endSec: 82, speakerId: "A" }]), cfg);
+  assert.equal(at(parked, 40).cameraId, "W", "B's turn: the dolly is on A");
+  assert.equal(at(parked, 56.5).cameraId, "F", "A again: the dolly never left, cut straight back");
+  const arrived = D.plan(mk([[54, 55, 15]], [{ startSec: 0, endSec: 54, speakerId: "B" }, { startSec: 55, endSec: 82, speakerId: "A" }]), cfg);
+  assert.equal(at(arrived, 56.5).cameraId, "W", "the operator only just swung to A: still settling");
+});
+
+test("a wide over a quick overlap hands back early to a dolly parked on the speaker", () => {
+  const mk = () => Object.assign(makeCurves([["A", 0.5, 50], ["B", 20, 22.5]], { durationSec: 52 }),
+    { cameraMotion: { F: motion(52, []) }, framing: { F: [{ startSec: 0, endSec: 52, speakerId: "A" }] } });
+  const style = Object.assign({}, base, { minWideSec: 9, minShotSec: 2, crosstalkMinSec: 0.5, asideSec: 0 });
+  const wideAt = (r) => r.shots.find((s) => s.cameraId === "W" && s.startSec > 15);
+  const full = wideAt(D.plan(mk(), { speakers, cameras: followCams, style: Object.assign({}, style, { parkedWideSec: 9 }) }));
+  assert.ok(full && full.endSec - full.startSec >= 8.9, "without the safe zone: the full minimum wide " + JSON.stringify(full));
+  const r = D.plan(mk(), { speakers, cameras: followCams, style: Object.assign({}, style, { parkedWideSec: 3 }) });
+  const w = wideAt(r);
+  assert.ok(w && w.endSec - w.startSec < 3.5 && w.endSec > 22.4, "parked on A: back to the dolly once B is done " + JSON.stringify(w));
+  assert.equal(at(r, 24).cameraId, "F");
+  // No motion readings: nothing is known to be parked, the minimum wide stands.
+  const blind = mk(); delete blind.cameraMotion; delete blind.framing;
+  const cams = [followCams[0], Object.assign({}, followCams[1], { moving: false })];
+  const bw = wideAt(D.plan(blind, { speakers, cameras: cams, style: Object.assign({}, style, { parkedWideSec: 3 }) }));
+  assert.ok(!bw || bw.endSec - bw.startSec >= 8.9, JSON.stringify(bw));
+});

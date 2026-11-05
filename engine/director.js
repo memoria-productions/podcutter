@@ -78,6 +78,8 @@
     comeBackSec: 3.0,          // after a move, only go back to the moving camera if it then stays usable this long (banter: stay wide)
     slowMovesOnAir: false,     // once on the shot, may gentle moves (push-ins, drifts) stay on air? off: operator reframes look sloppy
     movePadSec: 0.2,           // leave a move this early / come back this late
+    parkedSec: 2.0,            // a follow cam still on someone at least this long is parked on them: a safe zone, no settling needed
+    parkedWideSec: 3.0,        // a wide that hands back to a follow cam parked on the talker only needs this long (not minWideSec)
     guessFraming: true,        // without "who's in the shot", a follow cam stays on whoever it settled on until it moves again
     checkFramingByAudio: true, // a long steady stretch "on" someone silent while another does the talking is on the talker
     // Cleanup cuts (sections that will be removed)
@@ -150,7 +152,7 @@
       label: "Wide + dolly handoffs",
       description: "Learned from 35 finished Classical et cetera edits and their dolly footage: the wide around each change of speaker, the new speaker's solo once they've settled in, short turns on the wide, long unhurried shots. For a static wide plus an operated camera.",
       needs: "wide",
-      style: { soloAfterSec: 4.5, wideLeadSec: 1.5, crosstalkMinSec: 3, minWideSec: 9, minShotSec: 8, comeBackSec: 1.5,
+      style: { soloAfterSec: 4.5, wideLeadSec: 1.5, crosstalkMinSec: 3, minWideSec: 9, parkedWideSec: 4.5, minShotSec: 8, comeBackSec: 1.5,
                interjectionMode: "reaction", interjectionChance: 0, groupReactWide: true, maxShotSec: 0 }
     },
     social: {
@@ -886,7 +888,8 @@
       for (var f = a; f < b; f++) if (!onAir(cam, f)) return false;
       return true;
     }
-    return { state: state, onAir: onAir, settled: settled, okFrom: okFrom, canShow: canShow, has: function (c) { return !!stab.grid[c]; } };
+    return { state: state, onAir: onAir, settled: settled, okFrom: okFrom, canShow: canShow, settleFrames: settle,
+      has: function (c) { return !!stab.grid[c]; } };
   }
 
   /** Only cut to a moving camera once it has settled; cut away while it moves. */
@@ -1047,6 +1050,41 @@
     return null;
   }
 
+  /**
+   * Safe zones: where a follow cam with motion readings sits still on one person. Per frame, the frame its current
+   * still stretch on that person began (-1: moving, or on nobody known). Settling only matters at the edges of a
+   * zone, next to a move; parked well inside one, the camera can be cut to at once.
+   */
+  function buildParked(ctx, style) {
+    var out = {};
+    Object.keys(ctx.framing || {}).forEach(function (cam) {
+      var g = ctx.framing[cam];
+      if (!ctx.ci.isFollow(cam) || !ctx.stable.has(cam)) return;
+      var since = new Int32Array(g.length).fill(-1);
+      for (var f = 0; f < g.length; f++) {
+        var s = ctx.stable.state(cam, f), still = s === STEADY || (s === SLOW && style.slowMovesOnAir);
+        if (!still || g[f] < 0) continue;
+        since[f] = f > 0 && since[f - 1] >= 0 && g[f - 1] === g[f] ? since[f - 1] : f;
+      }
+      out[cam] = since;
+    });
+    return out;
+  }
+  /** Is follow cam `cam` parked on speaker `si` at frame f (still on them for parkedSec, and staying usable)? */
+  function parkedOn(ctx, cam, si, f) {
+    var since = ctx.parked && ctx.parked[cam], g = ctx.framing && ctx.framing[cam];
+    if (!since || f < 0 || f >= since.length || since[f] < 0 || g[f] !== si) return false;
+    var need = Math.max(ctx.stable.settleFrames, Math.round((ctx.style.parkedSec || 0) * ctx.fr));
+    return f - since[f] >= need && ctx.stable.okFrom(cam, f);
+  }
+
+  /** Is follow cam `cam` parked on whoever holds the floor at frame f (or takes it within the next second)? */
+  function parkedOnTalker(ctx, cam, f) {
+    if (!ctx.parked || !ctx.parked[cam]) return false;
+    for (var k = f; k < Math.min(ctx.frames, f + Math.round(ctx.fr)); k++) if (ctx.floor[k] >= 0) return parkedOn(ctx, cam, ctx.floor[k], f);
+    return false;
+  }
+
   /** Follow cams: replace the stretches where the camera is on someone other than the person in the shot. */
   function applyFraming(shots, style, ctx) {
     if (!ctx.framing || !Object.keys(ctx.framing).length) return shots;
@@ -1104,6 +1142,8 @@
       var s = out[i], prev = out[i - 1];
       if (s.locked || s.cameraId === wide || s.reason !== "speaker" || !s.speakers || s.speakers.length !== 1) continue;
       if (prev.speakers && prev.speakers.length === 1 && prev.speakers[0] === s.speakers[0]) continue; // same turn carrying on
+      // The wide covers the operator finding the new speaker. If the camera is already parked on them, it isn't needed.
+      if (parkedOn(ctx, s.cameraId, s.speakers[0], s.start)) continue;
       var cut = s.start + after;
       var bridge = { start: s.start, end: s.end - cut < minShot ? s.end : cut, cameraId: wide, reason: "handoff",
         speakers: s.speakers.slice(), onset: false, locked: false, keepShort: true };
@@ -1132,8 +1172,13 @@
     for (var i = 0; i < shots.length; i++) {
       var s = shots[i];
       if (s.cameraId !== wide || s.locked || s.end - s.start >= need) continue;
-      // Run forward into the following shots (never over a locked shot).
-      var want = s.start + need;
+      // Run forward into the following shots (never over a locked shot). Into a follow cam already parked on the
+      // talker, the wide only needs parkedWideSec: the camera is ready, there's nothing to wait for.
+      var want = s.start + need, need2 = need, nx = shots[i + 1];
+      if (nx && parkedOnTalker(ctx, nx.cameraId, s.end)) {
+        need2 = Math.min(need, Math.round((style.parkedWideSec || 0) * fr));
+        want = Math.max(s.end, s.start + need2);
+      }
       for (var j = i + 1; j < shots.length && s.end < want; j++) {
         var n = shots[j];
         if (n.locked || n.reason === "reaction" || !canShow(wide, n.start, Math.min(n.end, want))) break;
@@ -1142,8 +1187,8 @@
         } else { n.start = want; s.end = want; }
       }
       // Still short (locked shot or end of show ahead): reach back instead.
-      if (s.end - s.start < need) {
-        var wantStart = s.end - need;
+      if (s.end - s.start < need2) {
+        var wantStart = s.end - need2;
         for (var k = i - 1; k >= 0 && s.start > wantStart; k--) {
           var p = shots[k];
           if (p.locked || p.reason === "reaction" || p.end !== s.start || !canShow(wide, Math.max(p.start, wantStart), p.end)) break;
@@ -1377,6 +1422,8 @@
     ctx.framing = buildFraming(input, cameras, speakers, ctx);
     checkFraming(ctx, classified.main, style);
     guessFraming(ctx, cameras, classified.main, style);
+    ctx.style = style;
+    ctx.parked = buildParked(ctx, style);
     var shots = splitByFloor(built.shots, ctx);
     shots = applyInterjections(shots, classified.interjections, speakers, style, ctx);
     shots = applyCutaways(shots, speakers, style, ctx);
@@ -1756,7 +1803,7 @@
   }
 
   return {
-    VERSION: "0.22.0",
+    VERSION: "0.23.0",
     DEFAULT_STYLE: DEFAULT_STYLE,
     DEFAULT_SPEAKER: DEFAULT_SPEAKER,
     PRESETS: PRESETS,

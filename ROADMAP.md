@@ -100,6 +100,10 @@
 - **Dolly stays on the last person until it moves** (when there is no Who's in the shot reading), and a follow-cam shot that runs across a change of speaker is checked against whoever has the floor at each moment.
 - **Picture names checked by voice:** a long steady dolly stretch named after someone silent while another person talks is treated as on the talker. A follow-cam shot spanning several speakers is split per speaker, so monologue cutaways measure one person's turn. A brief aside over someone who carries on isn't crosstalk.
 
+## v0.23 (added)
+
+- **Safe zones on the dolly:** where the operated camera sits still on one person for 2 s or more (**Parked after**), it's parked on them, and settling only matters at the edges of a move. A wide handing back to a dolly already parked on whoever is talking (an interjection over them, a short answer) stays up only **Wide before parked cam** (4.5 s in Wide + dolly handoffs, 3 s otherwise) instead of the full Minimum wide. Measured on 35 past episodes with their dolly footage: when the dolly was already on the next speaker, David was on the solo 34% of the time 2 s into the turn and 55% by 4 s, against 3% and 5% when it had to move. PodCutter treated both alike (18% and 25%). Wide + dolly handoffs now matches David's camera choice 82% of the time (was 79%), and Balanced 70% (was 64%). The dolly is still on air mid-move only 0.1% of the solo time.
+
 ## v0.22 (added)
 
 - **Edit review on the Cleanup tab**, from a hand review of episode 245:

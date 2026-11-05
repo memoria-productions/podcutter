@@ -37,7 +37,7 @@ vendor/                  (not in git) bundled ffmpeg / whisper / models
 7. **Reactions:** interjections become reaction shots, with probability, spacing, and per-speaker switches.
 8. **Cutaways:** shots longer than `maxShotSec` get a wide, listener, or alternate angle, placed at the quietest moment near evenly spaced targets.
 9. **Timing:** speech-onset cuts shift by `cutTimingSec`. Optionally opens on the wide.
-9b. **Moving cameras:** each moving camera's motion curve is median-filtered and classed as steady, slow, or fast. A cut to it waits (holding the previous shot, up to `maxWaitSec`) until it has been steady for `settleSec`. Fast moves, and slow ones if `slowMovesOnAir` is off, are replaced by the wide or another static angle. Minimum-shot cleanup never puts a moving camera back on air.
+9b. **Moving cameras:** each moving camera's motion curve is median-filtered and classed as steady, slow, or fast. A cut to it waits (holding the previous shot, up to `maxWaitSec`) until it has been steady for `settleSec`. Fast moves, and slow ones if `slowMovesOnAir` is off, are replaced by the wide or another static angle. Minimum-shot cleanup never puts a moving camera back on air. Safe zones: where a follow cam has been still on one person for `parkedSec`, it's parked; a wide handing back to it only needs `parkedWideSec` (not `minWideSec`), and the handoff wide is skipped for a speaker it's already on.
 10. **Cleanup:** shortest-first minimum-shot absorption, manual locks, frame snapping.
 
 ## Develop
